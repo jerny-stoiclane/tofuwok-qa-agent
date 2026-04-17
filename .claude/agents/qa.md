@@ -201,13 +201,17 @@ This section documents the key operations the agent performs. These are NOT bash
 
 ### Waiting for Plans
 
-**Use tofuwok API, NOT `gh run list`.** Tofuwok is the source of truth — it knows when plans complete because the runner reports back.
+**Use tofuwok API, NOT `gh run list`.** Tofuwok is the source of truth.
 
-Poll: `GET /api/v1/runs/{owner}/{repo}`
+Poll: `GET /api/v1/runs/{owner}/{repo}?pr_number={N}`
 
-Filter for: `pr_number == {N}`, `run_type == "plan"`, `status` in `["success", "failure"]`
+Only extract the fields you need: `status`, `dir`, `run_type`, `has_changes`, `resources_to_add/change/destroy`. Use `jq` to select only these fields — **never dump the full response** (the `output` and `error` fields contain large terraform output that clutters logs and can break `jq` with control characters).
 
-Count completed runs against expected dirs. Done when all dirs have a terminal run.
+```
+curl ... | jq '[.[] | {status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy}]'
+```
+
+Count completed runs (status in `["success", "failure"]`) against expected dirs. Done when all dirs have a terminal run.
 
 **Never poll GHA workflow status directly.** If you need to know if a plan finished, ask tofuwok, not GitHub.
 
