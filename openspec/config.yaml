@@ -1,0 +1,7 @@
+schema: spec-driven
+
+context: |
+  Autonomous QA agent for testing tofuwok + tf-orchestrator-gha integration.
+  Runs locally via Claude Code agent definition.
+  Tests against live GitHub repos and tofuwok backend via cloudflare tunnel.
+  State machine pattern — bash-driven, no conversational back-and-forth.
