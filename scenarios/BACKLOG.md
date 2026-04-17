@@ -1,46 +1,58 @@
 # Scenario Backlog
 
-Edge cases and scenarios identified but not yet written. Prioritize as needed.
+Edge cases identified. Status from tofuwok developer review.
 
 ## State/Apply Timing
 
-- [ ] **Sequential applies on same PR** — apply dir A, then apply dir B. Does B's plan see A's state changes?
-- [ ] **Apply timeout** — terraform apply hangs forever. Lock held indefinitely? Heartbeat should catch it.
-- [ ] **Push after apply** — ✅ written as `t2-lifecycle/push-after-apply`
+- [x] **Push after apply** — HANDLED (supersession). Written as `t2-lifecycle/push-after-apply`. Verify with test.
+- [x] **Sequential applies (dir A then dir B)** — HANDLED (separate locks per dir, parallel). No scenario needed unless they share state.
+- [ ] **Apply timeout / hangs forever** — PARTIAL. Temporal: 60min hard timeout. GHA: lock TTL 30min. No active watchdog. Lock janitor (F63) cleans up after. Worth testing GHA path.
 
 ## Merge Edge Cases
 
-- [ ] **Squash merge vs merge commit vs rebase** — does tofuwok handle all three merge strategies? Lock release, affected detection.
-- [ ] **Merge with conflicts** — PR has merge conflicts with main. What happens to locks? Can you still apply?
-- [ ] **Fast-forward merge** — no merge commit created. Does affected detection still work on push to main?
+- [x] **Squash vs merge commit vs rebase** — HANDLED (agnostic, only checks `pr.GetMerged()` boolean). Worth a quick verification test.
+- [x] **Merge with conflicts** — NOT OUR PROBLEM (GitHub blocks merge). No scenario needed.
+- [x] **Fast-forward merge** — HANDLED (same Merged=true webhook). No scenario needed.
 
 ## Multi-Dir Interaction
 
-- [ ] **Shared module change fan-out** — change `test/modules/label/`, verify tofuwok plans all consuming dirs (alpha/snowflake, bravo/snowflake, charlie/snowflake)
-- [ ] **Partial apply on multi-dir** — PR touches 6 dirs, apply only 3, close PR. Orphaned applies on 3 dirs, unapplied locks on 3.
+- [x] **Shared module change fan-out** — HANDLED (`internal/affected/modules.go` ModuleGraph traces dependencies transitively). Worth testing to verify.
+- [x] **Partial apply on multi-dir + close** — HANDLED (handlePRClosed force-releases remaining locks, dispatches applies for unapplied dirs if apply_mode=after_merge). Worth testing.
 
 ## Webhook/Event Edge Cases
 
-- [ ] **Duplicate webhook** — same PR event delivered twice. Plan should be idempotent, not dispatch twice.
-- [ ] **Out-of-order events** — synchronize arrives before previous plan finishes. Supersession should handle it.
-- [ ] **Webhook delivery failure + retry** — GitHub retries after 10s. Tofuwok should handle the delayed duplicate.
+- [ ] **Out-of-order events** — PARTIAL. cancelRunsForPR cancels in-flight plans, but no sequence tracking. If B arrives before A, no detection.
+- [ ] **Duplicate webhook** — NOT HANDLED. X-GitHub-Delivery logged but never checked. Two identical webhooks create two runs + two dispatches. Lock contention prevents both executing but wasteful + confusing state. **File as tofuwok bug/feature.**
 
 ## Concurrent Edge Cases
 
-- [ ] **Same user, two PRs, same dir** — both plan, lock conflict. Normal flow but worth verifying the UX.
-- [ ] **Bot PR + human PR same dir** — Renovate bumps a provider, human changes resources. Lock contention between bot and human.
-- [ ] **Rapid PR creation** — 5 PRs opened in 30 seconds, all touching different dirs. Tofuwok should handle the burst.
+- [x] **Two PRs same dir** — HANDLED (lock system). Already tested as `t3-multi-pr/lock-conflict`.
+- [x] **Bot PR + human PR same dir** — HANDLED (locks are PR-scoped, bot PRs are just PRs). No special scenario needed.
+- [ ] **Rapid PR creation (5 PRs in 30s)** — Untested. Likely handled but worth stress testing.
 
-## Error Recovery
+## Priority for Testing
 
-- [ ] **Backend down during plan** — S3 backend unreachable. Plan fails on init. Error surfaced correctly?
-- [ ] **State lock contention** — terraform state lock held by another process. Plan fails with lock error. Tofuwok should surface this differently from a code error.
-- [ ] **OOM on large plan** — terraform runs out of memory on a huge plan. GHA runner killed. Heartbeat detects orphan.
+### Should test (not handled or partial):
+1. **Duplicate webhook** — create scenario, likely reveals a bug
+2. **Apply timeout / GHA lock TTL expiry** — test heartbeat path
+3. **Out-of-order synchronize** — hard to test but worth trying
+
+### Should verify (handled but untested):
+4. **Push after apply** — scenario written, needs to run
+5. **Shared module fan-out** — write scenario
+6. **Partial apply + close** — write scenario
+7. **Squash merge** — quick verification
+
+### Don't need scenarios:
+- Merge with conflicts (GitHub problem)
+- Fast-forward merge (same webhook)
+- Sequential dir applies (terraform design, not ours)
+- Bot vs human PRs (just PRs)
 
 ## Real Infra (T3)
 
-- [ ] **Drift detection** — moved to `t3-real-infra/drift-detection`
-- [ ] **Provider auth failure** — moved to `t3-real-infra/provider-auth-failure`
-- [ ] **Actual S3 backend** — plan/apply with real S3 state, not local backend
+- [ ] **Drift detection** — at `t3-real-infra/drift-detection`
+- [ ] **Provider auth failure** — at `t3-real-infra/provider-auth-failure`
+- [ ] **Actual S3 backend** — plan/apply with real S3 state
 - [ ] **Cross-account assume role** — different AWS accounts per company dir
-- [ ] **Cost estimation** — infracost on plan output, verify cost is recorded
+- [ ] **Cost estimation** — infracost on plan output
