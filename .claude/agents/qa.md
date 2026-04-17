@@ -38,6 +38,34 @@ These values are fixed for all scenarios:
 All `curl` calls to tofuwok MUST include `-H "Authorization: Bearer $TOFUWOK_TOKEN"`.
 All `gh` calls MUST include `--repo jerny-stoiclane/terraform-orchestrator-gha`.
 
+### Tofuwok API Reference
+
+Full Swagger docs: `http://localhost:8080/swagger/index.html` (or fetch `http://localhost:8080/swagger/doc.json` for machine-readable spec). All endpoints are under `/api/v1/`.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/locks` | Acquire a directory lock (409 on conflict, idempotent for same PR) |
+| `GET` | `/locks/{owner}/{repo}` | List all locks for a repo |
+| `GET` | `/locks/{owner}/{repo}/check?dir=...&workspace=...` | Check lock on specific dir |
+| `DELETE` | `/locks/{owner}/{repo}?dir=...&workspace=...&released_by=...` | Release a lock |
+| `GET` | `/runs/{owner}/{repo}` | List runs (filter with `?pr_number=N`) |
+| `GET` | `/runs/{runID}` | Get run details (status, output, resource counts) |
+| `POST` | `/runs/{runID}/cancel` | Cancel a stuck run |
+| `GET` | `/runs/{runID}/logs` | Get step-by-step execution logs |
+| `GET` | `/runs/{runID}/events` | Get run state transition events |
+| `POST` | `/trigger` | Trigger plan or apply for a single dir |
+| `GET` | `/repos` | List registered repos (check execution_mode) |
+| `GET` | `/stacks` | List all stacks across repos (last run status per dir) |
+| `GET` | `/prs` | List all PRs across repos |
+| `GET` | `/locks` | List all locks across all repos |
+| `GET` | `/events` | List all events (audit trail) |
+| `GET` | `/orgs/{owner}/config` | Get org config (lock policies, defaults) |
+
+If you need more detail on any endpoint (request/response schema, query params), fetch the Swagger doc:
+```
+curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}"]'
+```
+
 ---
 
 ## Invocation
