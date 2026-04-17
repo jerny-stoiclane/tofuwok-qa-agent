@@ -79,6 +79,12 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 | `qa all` | Run all-t1, then all-t2, then ask before all-t3 |
 | `qa cleanup` | Run the cleanup procedure immediately |
 | `qa status` | Check tofuwok API, list locks, list open test PRs |
+| `qa results` | Show recent test results from DB: `bin/qa-db latest` |
+| `qa history` | Show full history: `bin/qa-db history` |
+| `qa history {scenario}` | Show runs for a specific scenario: `bin/qa-db history --scenario {name}` |
+| `qa flaky` | Show flaky scenarios: `bin/qa-db flaky` |
+| `qa summary` | Pass/fail counts per scenario: `bin/qa-db summary` |
+| `qa bugs` | List open bug reports from `bugs/` |
 
 ### Scenario Completion — What Happens After
 
@@ -154,7 +160,53 @@ On startup, if `results/PROGRESS.md` exists and shows `Status: running`, resume 
 
 **Step 6 — Cleanup.** Always run cleanup, even if a phase failed. This is mandatory. Never skip it.
 
-**Step 7 — Record to DB.** After each scenario completes, record the result:
+**Step 7 — File Bugs.** For each failed assertion, determine if it's a product bug (tofuwok) or a test defect (QA scenario/tooling). For product bugs, write a bug report to `bugs/BUG-{NNN}-{slug}.md`. Auto-increment the bug number from existing files.
+
+Bug report format:
+```markdown
+# BUG-{NNN}: {Short title}
+
+**Severity:** critical | high | medium | low
+**Component:** tofuwok-api | tofuwok-gha-runner | qa-tooling
+**Found in:** {scenario name}
+**Run ID:** {RUN_ID}
+**Date:** {ISO date}
+
+## Summary
+{1-2 sentences}
+
+## Reproduce
+- GIVEN {precondition}
+- WHEN {action — include the exact bin/twk or API call}
+- THEN {actual result}
+
+## Expected
+- THEN {expected result}
+
+## Evidence
+{paste the relevant output from the results file — the command + response}
+
+## Context
+- PR: #{N}
+- SHA: {sha}
+- Tofuwok run ID: {if applicable}
+- Results file: results/{scenario}-{RUN_ID}.md
+```
+
+Classify severity:
+- **critical**: data loss, stuck state, blocks all workflows
+- **high**: core feature broken (apply not tracked, status not posted)
+- **medium**: wrong output, missing defaults
+- **low**: cosmetic, edge case
+
+**Only file bugs with HIGH CONFIDENCE.** If you're unsure whether the failure is a product bug or a test issue, note it as "investigation needed" in the results file but do NOT create a bug report. Bugs should only be filed when:
+- You can reproduce the exact behavior via `bin/twk` or API call
+- The expected behavior is clearly documented (swagger, scenario spec)
+- The failure is not caused by timing, network, or test setup
+
+**Do NOT file bugs for test defects.** If the scenario or `bin/twk` was wrong, fix the test instead.
+
+**Step 8 — Record to DB.** After each scenario completes, record the result:
 ```bash
 bin/qa-db record --run-id {RUN_ID} --scenario {name} --status pass|fail|invalid \
   --duration {seconds} --passed {N} --total {N} --pr {PR_NUM} --sha {SHA} \
