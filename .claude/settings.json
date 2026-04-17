@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)"
+      "Bash(*)",
+      "Read(*)",
+      "Write(results/*)",
+      "Write(bugs/*)",
+      "Write(results/PROGRESS.md)",
+      "Edit(results/*)",
+      "Edit(bugs/*)"
     ]
   }
 }
