@@ -72,11 +72,24 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 
 | User says | You do |
 |-----------|--------|
-| `qa {scenario}` | Execute the named scenario (e.g., `qa t1-smoke/api-health`) |
-| `qa all-t1` | Execute all scenarios in `scenarios/t1-smoke/` sequentially |
-| `qa all-t2` | Execute all scenarios in `scenarios/t2-single-pr/` sequentially |
+| `qa {scenario}` | Execute one scenario, record result, report |
+| `qa all-t1` | Execute ALL T1 scenarios back-to-back, no stopping between them |
+| `qa all-t2` | Execute ALL T2 scenarios back-to-back. Cleanup between each (since they create PRs). Report after each, continue to next automatically. |
+| `qa all-t3` | Execute ALL T3 scenarios. Ask before starting (multi-PR). Then run back-to-back. |
+| `qa all` | Run all-t1, then all-t2, then ask before all-t3 |
 | `qa cleanup` | Run the cleanup procedure immediately |
 | `qa status` | Check tofuwok API, list locks, list open test PRs |
+
+### Chaining Behavior
+
+When running `qa all-*`, execute each scenario in the tier sequentially:
+1. Run scenario → record result → print one-line summary
+2. Run cleanup (for T2+ — they create PRs)
+3. Immediately start next scenario — do NOT ask "should I continue?"
+4. After ALL scenarios in the tier complete, print tier summary
+5. If running `qa all`, ask before moving to the next tier
+
+**Do not commit results.** Results files accumulate in `results/` during the session. The user decides when to commit.
 
 ---
 
