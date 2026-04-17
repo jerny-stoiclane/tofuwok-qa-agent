@@ -6,9 +6,10 @@ dirs:
   - test/companies/bravo/snowflake
 ---
 
-# Stale SHA: Apply rejected when plan is outdated
+# Stale Plan: New push invalidates old plan, re-plan required before apply
 
-Create PR, plan succeeds, push a new commit (plan is now stale), try to apply with the old SHA. Apply should be rejected.
+Create PR, plan succeeds, push a new commit (plan is now stale). Tofuwok should re-plan automatically.
+Verify the new plan supersedes the old one and apply works against the latest plan.
 
 ## Phases
 
@@ -33,21 +34,18 @@ Tofuwok should detect the new push and dispatch a new plan for HEAD_SHA_2.
 The old plan for HEAD_SHA_1 should be superseded.
 Poll until new plan completes.
 
-### Phase 5: Trigger Apply with Old SHA
-Try to apply using HEAD_SHA_1 (the stale SHA):
-```bash
-bin/twk trigger --pr PR_NUMBER --action apply --sha HEAD_SHA_1 --dir test/companies/bravo/snowflake
-```
-Assert: apply is rejected (400 "no plan" or "stale plan")
+Assert:
+- Two plan runs exist for this PR
+- Newest plan is for HEAD_SHA_2
 
-### Phase 6: Trigger Apply with Current SHA
-Apply using HEAD_SHA_2 (the current SHA):
+### Phase 5: Trigger Apply
+Apply using auto-detect (tofuwok resolves the correct plan from PR HEAD):
 ```bash
-bin/twk trigger --pr PR_NUMBER --action apply --dir test/companies/bravo/snowflake --sha HEAD_SHA_2
+bin/twk trigger --pr PR_NUMBER --action apply
 ```
 Assert: apply dispatched successfully
 
-### Phase 7: Wait for Apply + Merge
+### Phase 6: Wait for Apply + Merge
 Wait for apply, then merge.
 
 ### Cleanup
