@@ -181,19 +181,25 @@ This section documents the key operations the agent performs. These are NOT bash
 1. `gh pr create` with title `[qa] {scenario} — {RUN_ID}` and body `Automated QA test`
 2. Extract PR number from the output URL
 3. Get HEAD SHA via `gh pr view {number} --json headRefOid`
-4. Wait for the `affected.yaml` workflow to complete (poll `gh run list --workflow affected.yaml --branch {branch}` every 10s, timeout 90s)
+4. Wait for tofuwok to receive the affected upload and create runs. Poll tofuwok: `GET /api/v1/runs/{owner}/{repo}` filtering for `pr_number == {N}`. Timeout 120s, poll every 10s. Once tofuwok has runs for this PR, the affected detection succeeded.
+
+**NOTE:** The only time to use `gh run list` is if tofuwok has no runs after 120s — then check if the `affected.yaml` GHA workflow failed (dispatch issue, 502, etc.) to diagnose why.
 
 ### Waiting for Plans
 
-Poll tofuwok runs API: `GET /api/v1/runs/{owner}/{repo}`
+**Use tofuwok API, NOT `gh run list`.** Tofuwok is the source of truth — it knows when plans complete because the runner reports back.
+
+Poll: `GET /api/v1/runs/{owner}/{repo}`
 
 Filter for: `pr_number == {N}`, `run_type == "plan"`, `status` in `["success", "failure"]`
 
 Count completed runs against expected dirs. Done when all dirs have a terminal run.
 
+**Never poll GHA workflow status directly.** If you need to know if a plan finished, ask tofuwok, not GitHub.
+
 ### Waiting for Applies
 
-Same as waiting for plans but filter for `run_type == "apply"`.
+Same as waiting for plans but filter for `run_type == "apply"`. Always via tofuwok API.
 
 ### Verifying Locks
 

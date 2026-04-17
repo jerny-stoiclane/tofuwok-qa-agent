@@ -20,33 +20,29 @@ skill: create-test-pr
 
 Captures: PR_NUMBER, HEAD_SHA, BRANCH
 
-### Phase 2: Wait for Affected Detection
-skill: wait for affected.yaml workflow to complete on this branch
-Timeout: 90s
+### Phase 2: Wait for Plan via Tofuwok API
+Poll tofuwok runs API until a plan run exists for this PR + dir with terminal status.
+```
+GET /api/v1/runs/{owner}/{repo} → filter pr_number=PR_NUMBER, run_type=plan, dir=test/companies/bravo/snowflake
+```
+Timeout: 180s, poll every 15s
 
-### Phase 3: Wait for Plan
-skill: wait-for-plans
-  pr_number: PR_NUMBER
-  expected_dirs: [test/companies/bravo/snowflake]
-Timeout: 180s
+### Phase 3: Verify Plan Results via Tofuwok API
 
-### Phase 4: Verify Plan Results
+Assert plan run (tofuwok runs API):
+- Run exists with status=success, run_type=plan, dir=test/companies/bravo/snowflake
+- run.has_changes == true
 
-Assert plan run:
-- tofuwok run exists with status=success, run_type=plan, dir=test/companies/bravo/snowflake
-- run.has_changes == true (we added a comment to variables.tf)
-
-Assert lock:
-- Lock exists for test/companies/bravo/snowflake
+Assert lock (tofuwok locks API):
+- `GET /api/v1/locks/{owner}/{repo}` shows lock for test/companies/bravo/snowflake
 - lock.pr_number == PR_NUMBER
 - lock.applied == false
-- lock.lock_policy == "strict"
 
-Assert commit status:
+Assert commit status (GitHub API — this is set BY tofuwok, we verify it landed):
 - tofuwok/plan/test/companies/bravo/snowflake == success on HEAD_SHA
 
-Assert PR comment:
-- PR has a comment from tofuwok with plan output
+Assert PR comment (GitHub API — posted BY tofuwok):
+- PR has a comment with plan output
 
 ### Cleanup
 skill: cleanup

@@ -25,24 +25,21 @@ skill: create-test-pr
 
 Captures: PR_NUMBER, HEAD_SHA
 
-### Phase 2: Wait for Affected Detection
-Wait for affected.yaml workflow on this branch.
-Timeout: 90s
+### Phase 2: Wait for All Plans via Tofuwok API
+Poll tofuwok runs API until ALL 6 dirs have terminal plan runs for this PR.
+```
+GET /api/v1/runs/{owner}/{repo} → filter pr_number=PR_NUMBER, run_type=plan
+```
+Timeout: 300s, poll every 15s. Done when 6 runs with terminal status exist.
 
-### Phase 3: Wait for All Plans
-skill: wait-for-plans
-  pr_number: PR_NUMBER
-  expected_dirs: [all 6]
-Timeout: 300s (6 parallel plans)
+### Phase 3: Verify Plan Results via Tofuwok API
 
-### Phase 4: Verify Plan Results
+For each of the 6 dirs, assert via tofuwok API:
+- Run exists with status=success, run_type=plan (runs API)
+- Lock exists with pr_number == PR_NUMBER, applied == false (locks API)
+- Commit status tofuwok/plan/{dir} == success on HEAD_SHA (GitHub API — set by tofuwok)
 
-For each of the 6 dirs, assert:
-- tofuwok run exists with status=success, run_type=plan
-- Lock exists with pr_number == PR_NUMBER, applied == false
-- Commit status tofuwok/plan/{dir} == success on HEAD_SHA
-
-Assert PR comment:
+Assert PR comment (GitHub API — posted by tofuwok):
 - Comment contains plan results for all 6 dirs
 
 ### Cleanup
