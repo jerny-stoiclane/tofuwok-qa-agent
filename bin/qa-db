@@ -7,8 +7,13 @@
 #   record  --scenario S --status S ...     Record a test run
 #   history [--scenario S] [--status S]     Query past runs
 #   latest  [--scenario S]                  Show most recent run per scenario
-#   flaky   [--days N]                      Show scenarios with mixed pass/fail
+#   flaky   [--days N] [--window N]         Show scenarios with mixed pass/fail
 #   summary [--days N]                      Pass/fail counts per scenario
+#   regression                              Scenarios that newly started failing
+#   fixes                                   Scenarios that newly started passing
+#   streak  [--min N]                       Scenarios failing N+ consecutive runs
+#   blame   <scenario>                      First run where a scenario started failing
+#   health  [--window N]                    TestGrid-style status per scenario
 
 set -euo pipefail
 
@@ -163,7 +168,226 @@ case "$CMD" in
        ORDER BY scenario;"
     ;;
 
+  regression)
+    # Scenarios that PASSED in their second-most-recent run but FAIL in their most recent.
+    # Mirrors TestGrid's alert-open logic: a test transitions from green to red.
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+
+    sqlite3 -header -column "$DB" <<'SQL'
+WITH ranked AS (
+  SELECT scenario, status, run_id, started_at, head_sha,
+         ROW_NUMBER() OVER (PARTITION BY scenario ORDER BY started_at DESC) AS rn
+  FROM runs
+  WHERE status IN ('pass', 'fail')
+)
+SELECT cur.scenario,
+       cur.run_id   AS failing_run,
+       cur.head_sha AS sha,
+       prev.run_id  AS last_passing_run,
+       cur.started_at
+FROM ranked cur
+JOIN ranked prev ON cur.scenario = prev.scenario AND prev.rn = 2
+WHERE cur.rn = 1
+  AND cur.status  = 'fail'
+  AND prev.status = 'pass'
+ORDER BY cur.started_at DESC;
+SQL
+    ;;
+
+  fixes)
+    # Scenarios that FAILED in their second-most-recent run but PASS in their most recent.
+    # Mirrors TestGrid's alert-close logic (num_passes_to_disable_alert = 1).
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+
+    sqlite3 -header -column "$DB" <<'SQL'
+WITH ranked AS (
+  SELECT scenario, status, run_id, started_at, head_sha,
+         ROW_NUMBER() OVER (PARTITION BY scenario ORDER BY started_at DESC) AS rn
+  FROM runs
+  WHERE status IN ('pass', 'fail')
+)
+SELECT cur.scenario,
+       cur.run_id   AS passing_run,
+       cur.head_sha AS sha,
+       prev.run_id  AS last_failing_run,
+       cur.started_at
+FROM ranked cur
+JOIN ranked prev ON cur.scenario = prev.scenario AND prev.rn = 2
+WHERE cur.rn = 1
+  AND cur.status  = 'pass'
+  AND prev.status = 'fail'
+ORDER BY cur.started_at DESC;
+SQL
+    ;;
+
+  streak)
+    # Scenarios with N+ consecutive recent failures (default 3).
+    # Mirrors TestGrid's num_failures_to_alert: consecutive fail count before alerting.
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    MIN_STREAK=3
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --min) MIN_STREAK=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    sqlite3 -header -column "$DB" "
+WITH numbered AS (
+  SELECT scenario, status, run_id, started_at,
+         ROW_NUMBER() OVER (PARTITION BY scenario ORDER BY started_at DESC) AS rn
+  FROM runs
+  WHERE status IN ('pass', 'fail')
+),
+-- For each scenario, find the rank of the most recent non-fail run
+first_break AS (
+  SELECT scenario, MIN(rn) AS break_at
+  FROM numbered
+  WHERE status != 'fail'
+  GROUP BY scenario
+),
+-- Scenarios with no break at all (100% fail)
+no_break AS (
+  SELECT scenario, MAX(rn) AS total
+  FROM numbered
+  GROUP BY scenario
+  EXCEPT
+  SELECT scenario, MAX(rn) FROM numbered WHERE status != 'fail' GROUP BY scenario
+),
+streaks AS (
+  -- Scenarios that have a passing run somewhere: streak = break_at - 1
+  SELECT n.scenario,
+         fb.break_at - 1 AS consecutive_fails,
+         (SELECT run_id FROM numbered n2 WHERE n2.scenario = n.scenario AND n2.rn = fb.break_at - 1) AS first_fail_run,
+         (SELECT run_id FROM numbered n3 WHERE n3.scenario = n.scenario AND n3.rn = 1) AS latest_fail_run
+  FROM numbered n
+  JOIN first_break fb ON n.scenario = fb.scenario
+  WHERE n.rn = 1 AND n.status = 'fail'
+  GROUP BY n.scenario
+  UNION ALL
+  -- Scenarios that have NEVER passed: streak = total count
+  SELECT nb.scenario,
+         nb.total AS consecutive_fails,
+         (SELECT run_id FROM numbered n2 WHERE n2.scenario = nb.scenario AND n2.rn = nb.total) AS first_fail_run,
+         (SELECT run_id FROM numbered n3 WHERE n3.scenario = nb.scenario AND n3.rn = 1) AS latest_fail_run
+  FROM no_break nb
+)
+SELECT scenario, consecutive_fails, first_fail_run, latest_fail_run
+FROM streaks
+WHERE consecutive_fails >= $MIN_STREAK
+ORDER BY consecutive_fails DESC;
+"
+    ;;
+
+  blame)
+    # Find the first run_id where a currently-failing scenario started its current failure streak.
+    # Mirrors TestGrid's AlertInfo.FailBuildId: the build where the current outage began.
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    SCENARIO=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --scenario) SCENARIO=$2; shift 2 ;;
+        -*) shift ;;
+        *) SCENARIO=$1; shift ;;
+      esac
+    done
+    [ -z "$SCENARIO" ] && { echo "ERROR: scenario name required"; echo "Usage: qa-db blame <scenario>"; exit 1; }
+
+    sqlite3 -header -column "$DB" "
+WITH numbered AS (
+  SELECT id, scenario, status, run_id, started_at, head_sha, pr_number, notes,
+         ROW_NUMBER() OVER (ORDER BY started_at DESC) AS rn
+  FROM runs
+  WHERE scenario = '$SCENARIO' AND status IN ('pass', 'fail')
+),
+last_pass AS (
+  SELECT MIN(rn) AS rn FROM numbered WHERE status = 'pass'
+)
+SELECT n.run_id    AS blame_run,
+       n.head_sha  AS sha,
+       n.pr_number AS pr,
+       n.started_at,
+       n.notes,
+       (SELECT COUNT(*) FROM numbered WHERE status = 'fail' AND rn < COALESCE((SELECT rn FROM last_pass), 999999)) AS total_fails_in_streak
+FROM numbered n
+WHERE n.status = 'fail'
+  AND n.rn = COALESCE((SELECT rn - 1 FROM last_pass), (SELECT MAX(rn) FROM numbered))
+ORDER BY n.started_at ASC
+LIMIT 1;
+"
+    ;;
+
+  health)
+    # TestGrid-style per-scenario health status over a sliding window.
+    # Classifies each scenario as: PASS, FAIL, FLAKY, or STALE.
+    #
+    # Algorithm (adapted from TestGrid overallStatus + flipanalyzer):
+    #   STALE  — no runs in the window at all
+    #   FAIL   — N+ consecutive recent failures (like num_failures_to_alert, default 3)
+    #   FLAKY  — mixed pass/fail with flip_rate > 0 (at least one transition)
+    #   PASS   — all recent runs pass
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    WINDOW=10
+    FAIL_THRESHOLD=3
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --window) WINDOW=$2; shift 2 ;;
+        --fail-threshold) FAIL_THRESHOLD=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    sqlite3 -header -column "$DB" "
+WITH recent AS (
+  SELECT scenario, status, started_at,
+         ROW_NUMBER() OVER (PARTITION BY scenario ORDER BY started_at DESC) AS rn
+  FROM runs
+  WHERE status IN ('pass', 'fail')
+),
+windowed AS (
+  SELECT scenario,
+         COUNT(*) AS total,
+         SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS passes,
+         SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fails,
+         MAX(started_at) AS last_run
+  FROM recent
+  WHERE rn <= $WINDOW
+  GROUP BY scenario
+),
+-- Count consecutive failures from most recent run (rn=1) backwards
+streak AS (
+  SELECT r.scenario,
+         COALESCE(MIN(CASE WHEN r.status = 'pass' THEN r.rn END) - 1, $WINDOW) AS consec_fails
+  FROM recent r
+  WHERE r.rn <= $WINDOW
+  GROUP BY r.scenario
+)
+SELECT w.scenario,
+       CASE
+         WHEN w.last_run < datetime('now', '-7 days') THEN 'STALE'
+         WHEN s.consec_fails >= $FAIL_THRESHOLD THEN 'FAIL'
+         WHEN w.fails > 0 AND w.passes > 0 THEN 'FLAKY'
+         WHEN w.fails = 0 THEN 'PASS'
+         ELSE 'FAIL'
+       END AS status,
+       w.passes || '/' || w.total AS pass_rate,
+       s.consec_fails AS recent_streak,
+       ROUND(100.0 * w.fails / w.total, 1) AS fail_pct,
+       w.last_run
+FROM windowed w
+JOIN streak s ON w.scenario = s.scenario
+ORDER BY
+  CASE
+    WHEN w.last_run < datetime('now', '-7 days') THEN 3
+    WHEN s.consec_fails >= $FAIL_THRESHOLD THEN 0
+    WHEN w.fails > 0 AND w.passes > 0 THEN 1
+    ELSE 2
+  END,
+  s.consec_fails DESC;
+"
+    ;;
+
   help|*)
-    head -8 "$0" | tail -6
+    head -12 "$0" | tail -10
     ;;
 esac

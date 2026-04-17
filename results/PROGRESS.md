@@ -1,14 +1,16 @@
 # QA Progress
 
-- Run ID: 20260417-140957
-- Status: completed
-- Current: done
+- Run ID: 20260417-141650
+- Status: running
+- Current: t2-single-pr/no-changes (phase 1/5)
+
+## Active Artifacts
+- Branch: test-qa/20260417-141650
+- PR: (pending)
+- HEAD SHA: (pending)
 
 ## Completed
-- [x] t1-smoke/api-health — PASS (1s)
-- [x] t1-smoke/gh-access — PASS (3s)
-- [x] t1-smoke/clean-state — PASS (2s)
-- [x] t1-smoke/workflows-current — PASS (3s)
+(none)
 
 ## Remaining
-(none)
+- [ ] t2-single-pr/no-changes ← current
