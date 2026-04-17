@@ -1,16 +1,14 @@
 # QA Progress
 
-- Run ID: 20260417-134457
+- Run ID: 20260417-140957
 - Status: completed
 - Current: done
 
-## Active Artifacts
-- None
-
 ## Completed
-- [x] t2-single-pr/plan-apply-merge — FAIL (8/10 assertions)
+- [x] t1-smoke/api-health — PASS (1s)
+- [x] t1-smoke/gh-access — PASS (3s)
+- [x] t1-smoke/clean-state — PASS (2s)
+- [x] t1-smoke/workflows-current — PASS (3s)
 
-## Findings
-- Trigger apply requires `workspace: "default"` — without it returns 400 "no_plan"
-- Lock not marked applied=true after successful apply
-- No tofuwok/apply commit status set after successful apply
+## Remaining
+(none)

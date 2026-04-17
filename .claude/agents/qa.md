@@ -77,6 +77,7 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 | `qa all-t2` | Execute ALL T2 scenarios back-to-back. Cleanup between each (since they create PRs). Report after each, continue to next automatically. |
 | `qa all-t3` | Execute ALL T3 scenarios. Ask before starting (multi-PR). Then run back-to-back. |
 | `qa all` | Run all-t1, then all-t2, then ask before all-t3 |
+| `qa {group}` | Run all scenarios in a group directory (e.g., `qa t2-single-pr`, `qa t2-lifecycle`, `qa t2-locks`, `qa t2-errors`, `qa t3-multi-pr`) |
 | `qa cleanup` | Run the cleanup procedure immediately |
 | `qa status` | Check tofuwok API, list locks, list open test PRs |
 | `qa results` | Show recent test results from DB: `bin/qa-db latest` |
