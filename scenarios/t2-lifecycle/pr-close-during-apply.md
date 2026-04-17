@@ -6,9 +6,11 @@ dirs:
   - test/companies/bravo/snowflake
 ---
 
-# PR Close During Apply: Race condition
+# PR Close During Apply: Orphaned Apply
 
-Trigger apply, then close the PR while apply may still be running. Tests what happens to in-flight applies and locks when a PR is closed.
+Trigger apply, then close the PR while apply may still be running. If the apply completes but the PR is never merged, this creates an **orphaned apply** — infrastructure state changed but the code was never merged to main. Tofuwok should detect this and raise a warning issue.
+
+Related: tofuwok openspec — orphaned apply detection
 
 ## Phases
 
@@ -42,11 +44,12 @@ Assert — Lock state:
 - If apply completed: lock should be released (PR is closed)
 - If apply was somehow cancelled: lock should still be released
 
-Assert — State safety:
-- If apply succeeded but PR was closed (not merged): state changed but code wasn't merged
-- Tofuwok SHOULD raise a GitHub issue or warning: "Apply succeeded for {dir} on PR #{N} but PR was closed without merge. Infrastructure state has diverged from code on main."
-- Check if tofuwok created an issue on the repo with this warning
-- The next plan on this dir (from any PR) should detect the state change as drift
+Assert — Orphaned apply detection:
+- If apply succeeded but PR was closed (not merged): this is an **orphaned apply**
+- Tofuwok SHOULD detect the orphaned apply and raise a GitHub issue: "Orphaned apply: {dir} was applied on PR #{N} but PR was closed without merge. Infrastructure state has diverged from code on main."
+- Check tofuwok API for orphaned apply status on this run
+- Check if tofuwok created a GitHub issue on the repo flagging the orphan
+- The next plan on this dir (from any PR) should detect the orphaned state change as drift
 
 ### Cleanup
 Delete branch. Release any remaining locks.
