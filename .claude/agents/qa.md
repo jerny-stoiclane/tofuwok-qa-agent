@@ -154,7 +154,14 @@ On startup, if `results/PROGRESS.md` exists and shows `Status: running`, resume 
 
 **Step 6 — Cleanup.** Always run cleanup, even if a phase failed. This is mandatory. Never skip it.
 
-**Step 7 — Summary.** Print final summary. Write final status to results file.
+**Step 7 — Record to DB.** After each scenario completes, record the result:
+```bash
+bin/qa-db record --run-id {RUN_ID} --scenario {name} --status pass|fail|invalid \
+  --duration {seconds} --passed {N} --total {N} --pr {PR_NUM} --sha {SHA} \
+  --results-file results/{name}-{RUN_ID}.md
+```
+
+**Step 8 — Summary.** Print final summary. Write final status to results file.
 
 ### Phase Execution
 

@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# qa-db — test result storage for QA agent
+# Usage: qa-db <command> [args...]
+#
+# Commands:
+#   init                                    Create/migrate the database
+#   record  --scenario S --status S ...     Record a test run
+#   history [--scenario S] [--status S]     Query past runs
+#   latest  [--scenario S]                  Show most recent run per scenario
+#   flaky   [--days N]                      Show scenarios with mixed pass/fail
+#   summary [--days N]                      Pass/fail counts per scenario
+
+set -euo pipefail
+
+DB="${QA_DB:-$(dirname "$0")/../results/qa.db}"
+
+init_db() {
+  sqlite3 "$DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  scenario TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pass', 'fail', 'invalid')),
+  duration_s INTEGER,
+  assertions_passed INTEGER DEFAULT 0,
+  assertions_total INTEGER DEFAULT 0,
+  pr_number INTEGER,
+  head_sha TEXT,
+  notes TEXT,
+  results_file TEXT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_runs_scenario ON runs(scenario);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
+SQL
+  echo "Database initialized: $DB"
+}
+
+CMD=${1:-help}
+shift || true
+
+case "$CMD" in
+  init)
+    init_db
+    ;;
+
+  record)
+    # Ensure DB exists
+    [ -f "$DB" ] || init_db
+
+    SCENARIO="" STATUS="" DURATION="" PASSED="" TOTAL="" PR="" SHA="" NOTES="" RESULTS=""
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --run-id) RUN_ID=$2; shift 2 ;;
+        --scenario) SCENARIO=$2; shift 2 ;;
+        --status) STATUS=$2; shift 2 ;;
+        --duration) DURATION=$2; shift 2 ;;
+        --passed) PASSED=$2; shift 2 ;;
+        --total) TOTAL=$2; shift 2 ;;
+        --pr) PR=$2; shift 2 ;;
+        --sha) SHA=$2; shift 2 ;;
+        --notes) NOTES=$2; shift 2 ;;
+        --results-file) RESULTS=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    [ -z "$SCENARIO" ] && { echo "ERROR: --scenario required"; exit 1; }
+    [ -z "$STATUS" ] && { echo "ERROR: --status required"; exit 1; }
+    [ -z "$RUN_ID" ] && RUN_ID=$(date +%Y%m%d-%H%M%S)
+
+    sqlite3 "$DB" "INSERT INTO runs (run_id, scenario, status, duration_s, assertions_passed, assertions_total, pr_number, head_sha, notes, results_file)
+      VALUES ('$RUN_ID', '$SCENARIO', '$STATUS', ${DURATION:-NULL}, ${PASSED:-0}, ${TOTAL:-0}, ${PR:-NULL}, '${SHA:-}', '${NOTES:-}', '${RESULTS:-}');"
+
+    echo "Recorded: $SCENARIO $STATUS (run $RUN_ID)"
+    ;;
+
+  history)
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    SCENARIO="" STATUS="" LIMIT=20
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --scenario) SCENARIO=$2; shift 2 ;;
+        --status) STATUS=$2; shift 2 ;;
+        --limit) LIMIT=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    WHERE="1=1"
+    [ -n "$SCENARIO" ] && WHERE="$WHERE AND scenario='$SCENARIO'"
+    [ -n "$STATUS" ] && WHERE="$WHERE AND status='$STATUS'"
+
+    sqlite3 -header -column "$DB" \
+      "SELECT run_id, scenario, status, duration_s || 's' as duration, assertions_passed || '/' || assertions_total as assertions, pr_number as pr, started_at
+       FROM runs WHERE $WHERE ORDER BY started_at DESC LIMIT $LIMIT;"
+    ;;
+
+  latest)
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    SCENARIO=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --scenario) SCENARIO=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    WHERE=""
+    [ -n "$SCENARIO" ] && WHERE="WHERE scenario='$SCENARIO'"
+
+    sqlite3 -header -column "$DB" \
+      "SELECT scenario, status, duration_s || 's' as duration, assertions_passed || '/' || assertions_total as assertions, pr_number as pr, started_at
+       FROM runs r1 WHERE started_at = (SELECT MAX(started_at) FROM runs r2 WHERE r2.scenario = r1.scenario) $WHERE ORDER BY scenario;"
+    ;;
+
+  flaky)
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    DAYS=7
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --days) DAYS=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    sqlite3 -header -column "$DB" \
+      "SELECT scenario,
+              COUNT(*) as total_runs,
+              SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) as passes,
+              SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END) as fails,
+              ROUND(100.0 * SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END) / COUNT(*), 1) as fail_pct
+       FROM runs
+       WHERE started_at > datetime('now', '-$DAYS days')
+       GROUP BY scenario
+       HAVING COUNT(DISTINCT status) > 1
+       ORDER BY fail_pct DESC;"
+    ;;
+
+  summary)
+    [ -f "$DB" ] || { echo "No database. Run: qa-db init"; exit 1; }
+    DAYS=7
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --days) DAYS=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    sqlite3 -header -column "$DB" \
+      "SELECT scenario,
+              COUNT(*) as runs,
+              SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) as pass,
+              SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END) as fail,
+              SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END) as invalid,
+              ROUND(AVG(duration_s), 0) as avg_duration_s
+       FROM runs
+       WHERE started_at > datetime('now', '-$DAYS days')
+       GROUP BY scenario
+       ORDER BY scenario;"
+    ;;
+
+  help|*)
+    head -8 "$0" | tail -6
+    ;;
+esac
