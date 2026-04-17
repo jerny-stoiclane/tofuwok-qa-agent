@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# twk — tofuwok API helper for QA agent
+# Usage: twk <command> [args...]
+#
+# Commands:
+#   runs     --pr N [--type plan|apply] [--dir DIR]   List runs
+#   locks    [--dir DIR]                               List/check locks
+#   trigger  --pr N --dir DIR --type plan|apply        Trigger plan or apply
+#   health                                             Check API health
+#   repos                                              List repos
+#   cancel   --run-id ID                               Cancel a stuck run
+#   wait-plans  --pr N --dirs DIR1,DIR2 [--timeout S]  Poll until plans complete
+#   wait-applies --pr N --dirs DIR1,DIR2 [--timeout S] Poll until applies complete
+
+set -euo pipefail
+
+: "${TOFUWOK_API:=https://tofuwok.armhr.dev}"
+: "${TOFUWOK_TOKEN:=twk_86fe627e207a6b5d2d57702d290b85583d0ea0f4e994d9d350ba82980c206112}"
+OWNER="jerny-stoiclane"
+REPO="terraform-orchestrator-gha"
+
+api() {
+  local method=$1 path=$2
+  shift 2
+  curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" \
+    -X "$method" "$TOFUWOK_API/api/v1$path" "$@" 2>/dev/null | tr -d '\000-\037'
+}
+
+api_json() {
+  api "$@" -H "Content-Type: application/json"
+}
+
+CMD=${1:-help}
+shift || true
+
+case "$CMD" in
+  health)
+    RESP=$(curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" "$TOFUWOK_API/health" 2>/dev/null || echo "DOWN")
+    echo "$RESP"
+    ;;
+
+  repos)
+    api GET "/repos" | jq '[.[] | {repo, execution_mode: .settings.execution_mode, active, active_lock_count, open_pr_count}]'
+    ;;
+
+  runs)
+    PR="" TYPE="" DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --pr) PR=$2; shift 2 ;;
+        --type) TYPE=$2; shift 2 ;;
+        --dir) DIR=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESULT=$(api GET "/runs/$OWNER/$REPO")
+    FILTER="."
+    [ -n "$PR" ] && FILTER="$FILTER | select(.pr_number==$PR)"
+    [ -n "$TYPE" ] && FILTER="$FILTER | select(.run_type==\"$TYPE\")"
+    [ -n "$DIR" ] && FILTER="$FILTER | select(.dir==\"$DIR\")"
+    echo "$RESULT" | jq "[.[] | $FILTER | {id, status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy, started_at, completed_at}]"
+    ;;
+
+  locks)
+    DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --dir) DIR=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    RESULT=$(api GET "/locks/$OWNER/$REPO")
+    if [ -n "$DIR" ]; then
+      echo "$RESULT" | jq ".[] | select(.dir==\"$DIR\") | {dir, pr_number, applied, lock_policy, locked_by, locked_at}"
+    else
+      echo "$RESULT" | jq '[.[] | {dir, pr_number, applied, lock_policy}]'
+    fi
+    ;;
+
+  trigger)
+    PR="" DIR="" TYPE="" SHA="" BRANCH=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --pr) PR=$2; shift 2 ;;
+        --dir) DIR=$2; shift 2 ;;
+        --type) TYPE=$2; shift 2 ;;
+        --sha) SHA=$2; shift 2 ;;
+        --branch) BRANCH=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    api_json POST "/trigger" -d "{\"owner\":\"$OWNER\",\"repo\":\"$REPO\",\"dir\":\"$DIR\",\"workspace\":\"default\",\"pr_number\":$PR,\"commit_sha\":\"$SHA\",\"branch\":\"$BRANCH\",\"run_type\":\"$TYPE\",\"triggered_by\":\"qa-agent\"}" | jq .
+    ;;
+
+  cancel)
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --run-id) RUN_ID=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    api POST "/runs/$RUN_ID/cancel" | jq .
+    ;;
+
+  wait-plans|wait-applies)
+    RUN_TYPE="plan"
+    [ "$CMD" = "wait-applies" ] && RUN_TYPE="apply"
+    PR="" DIRS="" TIMEOUT=300
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --pr) PR=$2; shift 2 ;;
+        --dirs) DIRS=$2; shift 2 ;;
+        --timeout) TIMEOUT=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    IFS=',' read -ra DIR_LIST <<< "$DIRS"
+    EXPECTED=${#DIR_LIST[@]}
+    START=$(date +%s)
+
+    while true; do
+      ELAPSED=$(( $(date +%s) - START ))
+      if [ $ELAPSED -gt "$TIMEOUT" ]; then
+        echo "TIMEOUT after ${ELAPSED}s — only completed $COMPLETED/$EXPECTED"
+        exit 1
+      fi
+
+      RESULT=$(api GET "/runs/$OWNER/$REPO")
+      COMPLETED=0
+      for DIR in "${DIR_LIST[@]}"; do
+        HAS=$(echo "$RESULT" | jq "[.[] | select(.pr_number==$PR and .run_type==\"$RUN_TYPE\" and .dir==\"$DIR\" and (.status==\"success\" or .status==\"failure\"))] | length")
+        [ "$HAS" -gt 0 ] && COMPLETED=$((COMPLETED + 1))
+      done
+
+      echo "${ELAPSED}s — ${RUN_TYPE}s completed: $COMPLETED/$EXPECTED"
+
+      if [ "$COMPLETED" -ge "$EXPECTED" ]; then
+        # Output final results
+        for DIR in "${DIR_LIST[@]}"; do
+          echo "$RESULT" | jq -r ".[] | select(.pr_number==$PR and .run_type==\"$RUN_TYPE\" and .dir==\"$DIR\" and (.status==\"success\" or .status==\"failure\")) | \"\(.dir): \(.status) has_changes=\(.has_changes) +\(.resources_to_add) ~\(.resources_to_change) -\(.resources_to_destroy)\"" | tail -1
+        done
+        exit 0
+      fi
+
+      sleep 15
+    done
+    ;;
+
+  cleanup)
+    echo "=== Closing test PRs ==="
+    gh pr list --repo "$OWNER/$REPO" --search "test-qa/" --state open --json number --jq '.[].number' 2>/dev/null | while read -r PR; do
+      echo "Closing PR #$PR"
+      gh pr close "$PR" --repo "$OWNER/$REPO" --delete-branch 2>/dev/null || true
+    done
+
+    echo "=== Deleting test branches ==="
+    cd /Users/jernz/stoiclane/tf-orchestrator-gha
+    git fetch --prune origin 2>/dev/null
+    git branch -r 2>/dev/null | grep "origin/test-qa/" | sed 's|origin/||' | tr -d ' ' | while read -r BRANCH; do
+      echo "Deleting $BRANCH"
+      git push origin --delete "$BRANCH" 2>/dev/null || true
+    done
+
+    echo "=== Releasing locks ==="
+    LOCKS=$(api GET "/locks/$OWNER/$REPO" 2>/dev/null || echo "[]")
+    echo "$LOCKS" | jq -c '.[]' 2>/dev/null | while read -r LOCK; do
+      DIR=$(echo "$LOCK" | jq -r '.dir')
+      DIR_ENC=$(printf '%s' "$DIR" | jq -sRr @uri)
+      echo "Releasing lock: $DIR"
+      api DELETE "/locks/$OWNER/$REPO?dir=$DIR_ENC&workspace=default&released_by=qa-cleanup" || true
+    done
+
+    cd /Users/jernz/stoiclane/tofuwok-qa
+    echo "=== CLEANUP DONE ==="
+    ;;
+
+  help|*)
+    head -12 "$0" | tail -10
+    ;;
+esac

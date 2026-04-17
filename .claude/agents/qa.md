@@ -237,13 +237,25 @@ This section documents the key operations the agent performs. These are NOT bash
 
 Poll: `GET /api/v1/runs/{owner}/{repo}?pr_number={N}`
 
-Only extract the fields you need: `status`, `dir`, `run_type`, `has_changes`, `resources_to_add/change/destroy`. **Always pipe through `tr` to strip control characters before `jq`** — the `output`/`error` fields contain terraform ANSI codes that break JSON parsing.
+### `bin/twk` CLI — USE THIS, NOT RAW CURL
 
-```
-curl ... | tr -d '\000-\037' | jq '[.[] | {status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy}]'
+**All tofuwok API interaction MUST go through `bin/twk`.** Never write inline curl/jq polling loops. The CLI handles auth, control character stripping, field selection, and error handling.
+
+```bash
+bin/twk health                                        # Check API
+bin/twk repos                                         # List repos + config
+bin/twk runs --pr 9 --type plan                       # List plan runs for PR
+bin/twk runs --pr 9 --type plan --dir DIR             # Filter by dir
+bin/twk locks                                         # List all locks
+bin/twk locks --dir test/companies/bravo/snowflake    # Check specific lock
+bin/twk trigger --pr 9 --dir DIR --type apply --sha SHA --branch BRANCH
+bin/twk cancel --run-id UUID                          # Cancel stuck run
+bin/twk wait-plans --pr 9 --dirs DIR1,DIR2 --timeout 300
+bin/twk wait-applies --pr 9 --dirs DIR1,DIR2 --timeout 300
+bin/twk cleanup                                       # Nuclear cleanup
 ```
 
-**Every `curl | jq` in this agent MUST use `tr -d '\000-\037'` between them.** No exceptions.
+**Never write raw `curl` to the tofuwok API.** If `bin/twk` doesn't support what you need, say so — don't work around it with inline bash.
 
 Count completed runs (status in `["success", "failure"]`) against expected dirs. Done when all dirs have a terminal run.
 
