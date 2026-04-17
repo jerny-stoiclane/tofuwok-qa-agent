@@ -80,21 +80,28 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 | `qa cleanup` | Run the cleanup procedure immediately |
 | `qa status` | Check tofuwok API, list locks, list open test PRs |
 
-### Chaining Behavior
+### Scenario Completion — What Happens After
 
-**Single scenario (`qa {scenario}`):**
-1. Run the scenario → record result → print summary
-2. If PASS: print "Next in tier: {next scenario name}" and immediately start it
-3. If FAIL: print result, run cleanup, stop and report. User decides what to do.
-4. If no more scenarios in the tier: print tier summary and stop.
+**On PASS (all assertions passed):**
+1. Merge the PR → wait for apply via tofuwok API → verify apply succeeded
+2. Clean up remaining artifacts (orphan branches, locks) — don't ask
+3. Print one-line summary: `PASS — {assertions} — merged PR #{N} — apply verified`
+4. Immediately start the next scenario in the tier — don't ask
 
-**Tier (`qa all-t1`, `qa all-t2`):**
-Same as above — run each scenario in the tier sequentially, auto-continue on pass, stop on fail.
+**On FAIL (any assertion failed):**
+1. Do NOT merge the PR
+2. Do NOT clean up — leave everything in place for investigation
+3. Print summary with failures listed
+4. Ask: "Scenario failed. Leave artifacts for investigation, or clean up?"
+5. Wait for user to respond before doing anything else
+6. If user says clean up: close PR, release locks, delete branch
+7. If user says leave: stop, report where artifacts are (PR #, lock state, branch name)
 
-**Full suite (`qa all`):**
-Run all-t1, then all-t2. Ask before starting all-t3 (multi-PR).
+**Between scenarios in a chain (after a PASS):**
+Artifacts from previous scenario were already cleaned up during the PASS flow (merge + apply + cleanup). Next scenario starts on a clean slate.
 
-**Between T2+ scenarios:** always run cleanup before starting the next one (they create PRs/branches).
+**Tier boundaries (`qa all`):**
+Run all-t1 → all-t2 automatically. Ask before starting all-t3 (multi-PR creates multiple PRs).
 
 **Do not commit results.** Results files accumulate in `results/` during the session. The user decides when to commit.
 
@@ -239,14 +246,27 @@ Check that at least one comment contains expected content (plan output, apply re
 
 ### Cleanup
 
-This procedure ALWAYS runs, even on failure.
+There are two cleanup paths:
 
-**IMPORTANT:** T2+ scenarios should MERGE PRs as part of the test flow (to test apply). Cleanup only handles leftovers from failures — PRs that never got merged because something broke.
+**After PASS (automatic, no asking):**
+The PR was already merged as part of the test. Just clean up residual artifacts:
+1. Delete test branch if not auto-deleted by merge: `git push origin --delete test-qa/{RUN_ID}`
+2. Release any remaining locks: `GET /api/v1/locks/{owner}/{repo}` → `DELETE` with `released_by=qa-cleanup`
+3. Return to main: `git checkout main`
 
-1. Find open test PRs that should have been merged but weren't (scenario failed mid-way): `gh pr list --search "test-qa/" --state open` → close each with `--delete-branch`. Only close PRs that are clearly orphaned test artifacts, never PRs that are part of an active test.
-2. Delete remaining remote test branches: `git branch -r | grep "origin/test-qa/"` → `git push origin --delete` each
-3. Release all locks: `GET /api/v1/locks/{owner}/{repo}` → `DELETE` each lock with `released_by=qa-cleanup`
-4. Return to main: `git checkout main`
+**After FAIL (only when user says "clean up"):**
+The PR was NOT merged. Close it and tear everything down:
+1. Close the PR: `gh pr close {N} --delete-branch`
+2. Delete test branch: `git push origin --delete test-qa/{RUN_ID}`
+3. Release locks: same as above
+4. Return to main
+
+**Explicit `qa cleanup` command:**
+Nuclear option — find and close ALL open test PRs, delete ALL test branches, release ALL locks:
+1. `gh pr list --search "test-qa/" --state open` → close each with `--delete-branch`
+2. `git branch -r | grep "origin/test-qa/"` → `git push origin --delete` each
+3. Release all locks for the repo
+4. Return to main
 
 ---
 
