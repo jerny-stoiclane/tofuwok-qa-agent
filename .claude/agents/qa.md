@@ -158,6 +158,9 @@ When things go wrong, recover silently:
 **Tofuwok API returns 502/503:**
 Retry the same request 3 times with 5-second backoff. If still failing after 3 retries, mark the step as FAIL and continue.
 
+**jq parse error on API response:**
+This means the API returned invalid JSON (e.g., unescaped control characters). Do NOT retry in a loop — the response won't fix itself. Log the error, mark the step as FAIL with "invalid API response", and continue to the next phase. If you're in a polling loop, break out immediately on jq errors.
+
 **Tofuwok run stuck in "running" state (past 2x expected duration):**
 Cancel the run via `POST /api/v1/runs/{id}/cancel`. Wait 5 seconds. Retrigger via `POST /api/v1/trigger`. Resume polling.
 
