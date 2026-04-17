@@ -2,6 +2,7 @@
 name: gha-workflow-cancelled
 tier: t2
 timeout: 300
+orchestrator: gha
 dirs:
   - test/companies/bravo/snowflake
 ---

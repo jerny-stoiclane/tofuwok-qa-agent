@@ -2,6 +2,7 @@
 name: workflows-current
 tier: t1
 timeout: 30
+orchestrator: gha
 ---
 
 # Smoke: Workflows Current on Main

@@ -115,6 +115,25 @@ Every T2+ scenario must have a Cleanup section. The agent runs it even on failur
 | t2-locks | Lock acquire/release/force | 1 | 2-5min |
 | t3-multi-pr | Lock contention, concurrent PRs | 2+ | 5-10min |
 
+## Orchestrator Modes
+
+Tofuwok supports three execution modes: `local`, `temporal`, and `gha`. Most scenarios work on all modes. Only tag the exceptions in frontmatter:
+
+```yaml
+orchestrator: gha  # only add this if the scenario is mode-specific
+```
+
+If no `orchestrator` field, the scenario runs on all modes (default).
+
+**GHA-only scenarios:**
+- `t1-smoke/workflows-current` — checks GHA workflow files on main
+- `t2-cancel/gha-workflow-cancelled` — GHA runner dies, heartbeat timeout
+
+**Local/Temporal-only scenarios:**
+- (none yet — local executor uses different dispatch but same API)
+
+The agent reads the repo's `execution_mode` during preflight and skips scenarios that don't match.
+
 ## Groups
 
 Put related scenarios together:
