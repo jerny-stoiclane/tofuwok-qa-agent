@@ -82,12 +82,19 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 
 ### Chaining Behavior
 
-When running `qa all-*`, execute each scenario in the tier sequentially:
-1. Run scenario → record result → print one-line summary
-2. Run cleanup (for T2+ — they create PRs)
-3. Immediately start next scenario — do NOT ask "should I continue?"
-4. After ALL scenarios in the tier complete, print tier summary
-5. If running `qa all`, ask before moving to the next tier
+**Single scenario (`qa {scenario}`):**
+1. Run the scenario → record result → print summary
+2. If PASS: print "Next in tier: {next scenario name}" and immediately start it
+3. If FAIL: print result, run cleanup, stop and report. User decides what to do.
+4. If no more scenarios in the tier: print tier summary and stop.
+
+**Tier (`qa all-t1`, `qa all-t2`):**
+Same as above — run each scenario in the tier sequentially, auto-continue on pass, stop on fail.
+
+**Full suite (`qa all`):**
+Run all-t1, then all-t2. Ask before starting all-t3 (multi-PR).
+
+**Between T2+ scenarios:** always run cleanup before starting the next one (they create PRs/branches).
 
 **Do not commit results.** Results files accumulate in `results/` during the session. The user decides when to commit.
 
