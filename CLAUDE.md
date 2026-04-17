@@ -14,7 +14,7 @@ claude
 Then in the session, @-mention the agent:
 
 ```
-@qa run t1-smoke/api-health
+qa t1-smoke/api-health
 ```
 
 You'll see each Bash command and can approve/deny via Claude Code's permission system.
@@ -23,14 +23,14 @@ You'll see each Bash command and can approve/deny via Claude Code's permission s
 
 ```bash
 cd ~/stoiclane/tofuwok-qa
-claude -p "run t1-smoke/api-health" --agent qa
+claude -p "qa t1-smoke/api-health" --agent qa
 ```
 
 ### Option C: Fully non-interactive (CI-friendly)
 
 ```bash
 cd ~/stoiclane/tofuwok-qa
-claude --bare -p "run t2-single-pr/plan-apply-merge" --agent qa --allowedTools "Read,Write,Bash,Glob,Grep"
+claude --bare -p "qa t2-single-pr/plan-apply-merge" --agent qa --allowedTools "Read,Write,Bash,Glob,Grep"
 ```
 
 `--bare` skips environment discovery for faster, reproducible runs.
@@ -39,16 +39,16 @@ claude --bare -p "run t2-single-pr/plan-apply-merge" --agent qa --allowedTools "
 
 | Command | What it does |
 |---------|-------------|
-| `run t1-smoke/api-health` | Smoke test — check tofuwok API, repo registration, gh access |
-| `run t2-single-pr/single-dir-plan` | Create PR with 1 dir change, verify plan + lock |
-| `run t2-single-pr/multi-dir-plan` | Create PR with all 6 dirs, verify all plans + locks |
-| `run t2-single-pr/plan-apply-merge` | Full cycle: plan → merge → apply → verify cleanup |
-| `run t3-multi-pr/lock-conflict` | Two PRs same dir, verify lock conflict blocks second PR |
-| `run t3-multi-pr/lock-release-replan` | Full contention cycle: lock → conflict → release → replan |
-| `run all-t1` | Run all T1 scenarios sequentially |
-| `run all-t2` | Run all T2 scenarios sequentially |
-| `cleanup` | Close test PRs, delete branches, release locks |
-| `status` | Check tofuwok API, list locks and open test PRs |
+| `qa t1-smoke/api-health` | Smoke test — check tofuwok API, repo registration, gh access |
+| `qa t2-single-pr/single-dir-plan` | Create PR with 1 dir change, verify plan + lock |
+| `qa t2-single-pr/multi-dir-plan` | Create PR with all 6 dirs, verify all plans + locks |
+| `qa t2-single-pr/plan-apply-merge` | Full cycle: plan → merge → apply → verify cleanup |
+| `qa t3-multi-pr/lock-conflict` | Two PRs same dir, verify lock conflict blocks second PR |
+| `qa t3-multi-pr/lock-release-replan` | Full contention cycle: lock → conflict → release → replan |
+| `qa all-t1` | Run all T1 scenarios sequentially |
+| `qa all-t2` | Run all T2 scenarios sequentially |
+| `qa cleanup` | Close test PRs, delete branches, release locks |
+| `qa status` | Check tofuwok API, list locks and open test PRs |
 
 ### 4. Permissions
 

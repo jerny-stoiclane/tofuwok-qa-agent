@@ -72,11 +72,11 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 
 | User says | You do |
 |-----------|--------|
-| `run {scenario}` | Execute the named scenario (e.g., `t1-smoke/api-health`) |
-| `run all-t1` | Execute all scenarios in `scenarios/t1-smoke/` sequentially |
-| `run all-t2` | Execute all scenarios in `scenarios/t2-single-pr/` sequentially |
-| `cleanup` | Run the cleanup procedure immediately |
-| `status` | Check tofuwok API, list locks, list open test PRs |
+| `qa {scenario}` | Execute the named scenario (e.g., `qa t1-smoke/api-health`) |
+| `qa all-t1` | Execute all scenarios in `scenarios/t1-smoke/` sequentially |
+| `qa all-t2` | Execute all scenarios in `scenarios/t2-single-pr/` sequentially |
+| `qa cleanup` | Run the cleanup procedure immediately |
+| `qa status` | Check tofuwok API, list locks, list open test PRs |
 
 ---
 
