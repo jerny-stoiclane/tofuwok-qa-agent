@@ -172,7 +172,14 @@ This section documents the key operations the agent performs. These are NOT bash
 1. `cd` to TARGET_REPO_PATH
 2. `git checkout main && git pull origin main`
 3. `git checkout -b test-qa/{RUN_ID}` (or `test-qa/{RUN_ID}-pr1` for multi-PR scenarios)
-4. For each dir in the scenario: append `# qa-{RUN_ID}` to `{dir}/variables.tf`
+4. For each dir in the scenario: add a `null_resource` to `main.tf` that will produce a terraform change:
+   ```hcl
+   resource "null_resource" "qa_{RUN_ID_SANITIZED}" {
+     triggers = { id = "{RUN_ID}" }
+   }
+   ```
+   Sanitize RUN_ID for HCL: replace `-` with `_`.
+   **Do NOT just add comments** — comments don't change terraform state and `has_changes` will be false.
 5. `git add -A && git commit -m "test: qa {RUN_ID}"`
 6. `git push -u origin test-qa/{RUN_ID}`
 
@@ -232,9 +239,11 @@ Check that at least one comment contains expected content (plan output, apply re
 
 ### Cleanup
 
-This procedure ALWAYS runs, even on failure. It is the ONE place where PRs are closed (not merged).
+This procedure ALWAYS runs, even on failure.
 
-1. Find and close open test PRs: `gh pr list --search "test-qa/" --state open` → close each with `--delete-branch`
+**IMPORTANT:** T2+ scenarios should MERGE PRs as part of the test flow (to test apply). Cleanup only handles leftovers from failures — PRs that never got merged because something broke.
+
+1. Find open test PRs that should have been merged but weren't (scenario failed mid-way): `gh pr list --search "test-qa/" --state open` → close each with `--delete-branch`. Only close PRs that are clearly orphaned test artifacts, never PRs that are part of an active test.
 2. Delete remaining remote test branches: `git branch -r | grep "origin/test-qa/"` → `git push origin --delete` each
 3. Release all locks: `GET /api/v1/locks/{owner}/{repo}` → `DELETE` each lock with `released_by=qa-cleanup`
 4. Return to main: `git checkout main`
@@ -303,8 +312,18 @@ Do not print anything else between phase lines. No explanations, no questions, n
 
 ### You MUST NOT:
 - Ask for approval or confirmation mid-scenario
-- Close PRs (only merge or leave for cleanup)
 - Skip cleanup for any reason
+
+### PR Lifecycle — CRITICAL
+
+**Merge = Apply.** This is an apply-after-merge model. Merging a PR triggers tofuwok to dispatch apply workflows. Closing a PR does NOT trigger apply — it just releases locks.
+
+| Action | What happens | When to use |
+|--------|-------------|-------------|
+| **Merge** (`gh pr merge --merge`) | Code lands on main → tofuwok dispatches apply → terraform runs | End of every successful T2+ scenario |
+| **Close** (`gh pr close`) | PR closed, no apply, locks released | Only during cleanup of FAILED scenarios where merge was never reached |
+
+**Every T2+ scenario that passes MUST end with a merge.** The merge-then-verify-apply is the core thing we're testing. If you close instead of merge, you've skipped the most important part of the test.
 - Stop the scenario on a single assertion failure (continue and report all)
 - Guess at tofuwok API endpoints — use only the ones documented here
 - Create resources in AWS (all test terraform uses null_resource)

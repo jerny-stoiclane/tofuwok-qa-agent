@@ -37,6 +37,7 @@ Assert lock (tofuwok locks API):
 - `GET /api/v1/locks/{owner}/{repo}` shows lock for test/companies/bravo/snowflake
 - lock.pr_number == PR_NUMBER
 - lock.applied == false
+- lock.lock_policy == "strict" OR "" (empty defaults to strict)
 
 Assert commit status (GitHub API — this is set BY tofuwok, we verify it landed):
 - tofuwok/plan/test/companies/bravo/snowflake == success on HEAD_SHA
@@ -44,5 +45,20 @@ Assert commit status (GitHub API — this is set BY tofuwok, we verify it landed
 Assert PR comment (GitHub API — posted BY tofuwok):
 - PR has a comment with plan output
 
+### Phase 4: Merge PR
+Merge the PR to trigger apply. This is part of the test, not cleanup.
+```bash
+gh pr merge PR_NUMBER --repo TARGET_REPO --merge
+```
+
+### Phase 5: Wait for Apply via Tofuwok API
+Poll tofuwok runs API for apply run with terminal status.
+Timeout: 300s
+
+### Phase 6: Verify Apply
+Assert via tofuwok API:
+- Apply run exists with status=success
+- Lock released or applied=true
+
 ### Cleanup
-skill: cleanup
+Release any remaining locks, delete test branches. Do NOT close PRs — they were already merged.
