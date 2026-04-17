@@ -283,34 +283,85 @@ Nuclear option — find and close ALL open test PRs, delete ALL test branches, r
 
 ## Results Format
 
-Write to `results/{scenario-name}-{RUN_ID}.md`:
+Write to `results/{scenario-name}-{RUN_ID}.md`. Following the openclaw qa-lab report pattern: every step records its evidence (command + key response fields), not just pass/fail.
 
 ```markdown
 # {scenario} — {RUN_ID}
-**Started:** {ISO timestamp}
-**Target:** jerny-stoiclane/terraform-orchestrator-gha
-**PR:** #{number}
+
+- Started: {ISO timestamp}
+- Target: jerny-stoiclane/terraform-orchestrator-gha
+- PR: #{number}
+- HEAD SHA: {sha}
 
 ## Phase 1: {name}
-**Status:** PASS
-**Duration:** {N}s
-**Details:** {what happened, 1-3 lines}
 
-## Phase 2: {name}
-**Status:** FAIL
-**Duration:** {N}s
-**Details:** {what went wrong}
+- Status: PASS
+- Duration: {N}s
+- Steps:
+  - [x] Created branch test-qa/{RUN_ID}
+    - Details: `git push -u origin test-qa/{RUN_ID}` → pushed 1 commit
+  - [x] Created PR #8
+    - Details: `gh pr create` → https://github.com/.../pull/8
 
-## Assertions
-- [x] Plan completed for bravo/snowflake
-- [x] Lock acquired by PR #{N}
-- [ ] Commit status tofuwok/plan/... = success — MISSING
+## Phase 2: Wait for Plans
+
+- Status: PASS
+- Duration: 95s
+- Steps:
+  - [x] All 6 plans completed
+    - Details: polled `GET /api/v1/runs/.../terraform-orchestrator-gha` 7 times over 95s
+
+      ```text
+      _global/networking:       success, has_changes=true, +2 ~0 -0
+      alpha/aws/us-east-1:      success, has_changes=true, +2 ~0 -0
+      alpha/snowflake:          success, has_changes=true, +1 ~0 -0
+      bravo/aws/us-east-1:      success, has_changes=true, +2 ~0 -0
+      bravo/snowflake:          success, has_changes=true, +1 ~0 -0
+      charlie/snowflake:        success, has_changes=true, +1 ~0 -0
+      ```
+
+## Phase 3: Verify
+
+- Status: FAIL
+- Steps:
+  - [x] Lock exists for bravo/snowflake
+    - Details: `GET /api/v1/locks/.../terraform-orchestrator-gha` → pr_number=8, applied=false
+  - [ ] Commit status tofuwok/plan = success
+    - Details: `gh api commits/{sha}/statuses` → no status found for context "tofuwok/plan"
+
+      ```text
+      Available statuses: terraform/lock/test_companies_bravo_snowflake (success)
+      Expected: tofuwok/plan (missing)
+      ```
+
+## Timeline
+
+- 00:00 Created branch test-qa/20260417-050000
+- 00:03 Created PR #8
+- 00:15 First tofuwok run detected (plan, _global/networking)
+- 01:35 All 6 plans completed
+- 01:37 Lock verification passed
+- 01:38 Commit status check FAILED — tofuwok/plan not found
+- 01:40 Cleanup started
 
 ## Summary
-**Result:** FAIL
-**Duration:** {total}s
-**Assertions:** 2/3 passed
+
+- Result: FAIL
+- Duration: 100s
+- Passed: 7/8
+- Failed: 1/8
 ```
+
+### Evidence Rules
+
+**Every API call or CLI command made during verification MUST be recorded in the results file.** Not the full response — just:
+1. The command or endpoint called
+2. The key fields from the response (status, counts, IDs)
+3. For failures: what was expected vs what was received
+
+Use code blocks for multi-line evidence. Keep details concise but complete enough that a developer reading the results file can understand what happened without re-running the test.
+
+**Never write "PASS" without evidence.** If you assert something passed, the results file must show what you checked and what the response was.
 
 ---
 
