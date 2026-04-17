@@ -7,9 +7,9 @@
 
 ## Intent
 
-Build a Claude Code agent that runs end-to-end test scenarios against the tofuwok backend and `tf-orchestrator-gha` repo without getting stuck or requiring human intervention mid-scenario. The agent operates as a bash-driven state machine that uses Claude for decision-making on failures, not for step-by-step conversation.
+Build a Claude Code agent that runs E2E test scenarios against the tofuwok backend and `tf-orchestrator-gha` repo autonomously. The agent follows the pattern used by dagster's buildkite-expert (tiered response, smart escalation) and tofuwok's developer agent (read spec → execute → report) — but for QA workflows that involve creating PRs, waiting for GHA dispatches, verifying tofuwok API state, and testing lock contention.
 
-The existing tofuwok QA agent (`~/stoiclane/tofuwok/.claude/agents/tofuwok-qa.md`) has the right scenario structure but gets stuck on async waits, requires too much approval gating, and can't recover from transient failures (502s, stuck runs, stale locks).
+The existing tofuwok QA agent gets stuck because: too many approval gates, inline polling that times out, no self-recovery. This agent fixes those problems.
 
 ---
 
@@ -17,354 +17,357 @@ The existing tofuwok QA agent (`~/stoiclane/tofuwok/.claude/agents/tofuwok-qa.md
 
 ### In Scope
 
-- Agent definition (`.claude/agents/qa.md`) that runs locally
-- Bash helper library (`lib/`) for polling, retries, state tracking, recovery
-- Scenario definitions for tofuwok runner model (affected → dispatch → plan → apply)
-- Scenarios: smoke, single-PR lifecycle, multi-PR lock contention
-- Self-recovery from transient failures (502, stuck runs, orphan locks)
-- Structured result output (JSON + markdown)
-- Automatic bug filing on assertion failure
+- Agent definition (`.claude/agents/qa.md`)
+- Inline skills for: preflight, wait-for-dispatch, wait-for-run, verify-plan, verify-apply, verify-lock, cleanup, recover
+- Scenario definitions for the tofuwok runner model
+- T1 (smoke), T2 (single PR lifecycle), T3 (multi-PR lock contention)
+- Self-recovery from transient failures
+- Structured result output
 
 ### Out of Scope
 
-- GitHub Actions agent (runs locally only)
+- GitHub Actions agent (local only)
+- UI testing
+- Real AWS infra (null_resource only)
 - Agent SDK / remote execution
-- UI testing (browser-based)
-- Real AWS infra testing (null_resource only)
-- Drift detection testing (separate feature)
 
 ---
 
-## Architecture
+## Agent Design
 
-### State Machine, Not Conversation
+### Core Principle: Execute, Don't Converse
 
-Each scenario is a sequence of states. The agent reads the scenario, builds the state list, and executes each state. If a state fails transiently, it retries. If it fails permanently, it records the failure and moves to cleanup.
+The agent reads a scenario, executes it front-to-back, and reports results. It does NOT:
+- Ask for approval between steps (T1/T2 are auto-approved)
+- Wait for human input during async operations
+- Stop and ask "should I continue?" on transient failures
+
+It DOES:
+- Report progress after each major phase
+- Self-recover from known failure modes (502, stuck runs, orphan locks)
+- Stop and report clearly on unknown/permanent failures
+- Always run cleanup, even on failure
+
+### Three-Tier Response (from dagster buildkite-expert pattern)
+
+| Tier | Trigger | Autonomy | Duration |
+|------|---------|----------|----------|
+| T1: Smoke | "run smoke" | Fully auto, no PRs | 30s |
+| T2: Single PR | "run {scenario}" | Fully auto, creates 1 PR | 3-5min |
+| T3: Multi PR | "run lock-contention" | Auto, creates 2+ PRs | 5-10min |
+
+No approval gates for any tier. Agent runs to completion or failure.
+
+### Startup Sequence (from tofuwok developer pattern)
+
+When invoked with a scenario name:
 
 ```
-SCENARIO FILE (markdown)
-  → PARSE (extract states + assertions)
-  → EXECUTE (state machine)
-  → REPORT (structured results)
+1. PREFLIGHT
+   - Verify tofuwok API: curl $TOFUWOK_API/health
+   - Verify gh CLI: gh auth status
+   - Verify target repo: gh repo view $TARGET_REPO
+   - Check for stale test branches: gh pr list --search "test-qa/"
+   - Clean stale locks: curl $TOFUWOK_API/api/v1/locks/$OWNER/$REPO
+   → If any check fails: report and STOP (don't guess)
+
+2. READ SCENARIO
+   - Read scenarios/{tier}/{name}.md
+   - Parse into ordered state list
+   → Report: "Running {scenario} — {N} states, estimated {M}s"
+
+3. EXECUTE (see Skills below)
+
+4. REPORT
+   - Write results to results/{scenario}-{timestamp}.md
+   - Print summary: PASS/FAIL, assertions, duration, bugs
 ```
 
-### State Execution Model
+---
+
+## Skills (Inline Procedures)
+
+Skills are documented procedures the agent knows how to execute. Not bash scripts — the agent reads these and uses Bash tool calls.
+
+### skill:preflight
 
 ```
-┌─────────┐     ┌──────────┐     ┌────────┐     ┌─────────┐
-│ TRIGGER  │────→│   WAIT   │────→│ VERIFY │────→│  NEXT   │
-│ (action) │     │ (poll)   │     │(assert)│     │ (state) │
-└─────────┘     └──────────┘     └────────┘     └─────────┘
-                     │                │
-                     ▼                ▼
-                ┌──────────┐    ┌──────────┐
-                │  RETRY   │    │   BUG    │
-                │(recover) │    │ (file)   │
-                └──────────┘    └──────────┘
+PURPOSE: Verify environment before any scenario
+
+CHECK tofuwok API health:
+  curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" "$TOFUWOK_API/health"
+  FAIL if not "ok"
+
+CHECK tofuwok repo registered:
+  curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" "$TOFUWOK_API/api/v1/repos" | jq '.[] | select(.repo=="terraform-orchestrator-gha")'
+  FAIL if not found or execution_mode != "gha"
+
+CHECK gh CLI:
+  gh auth status
+  gh repo view $TARGET_REPO --json name
+  FAIL if either fails
+
+CHECK no stale test artifacts:
+  STALE_PRS=$(gh pr list --repo $TARGET_REPO --search "test-qa/" --state open --json number)
+  STALE_LOCKS=$(curl -sf "$TOFUWOK_API/api/v1/locks/$OWNER/$REPO" | jq length)
+  If stale PRs or locks exist: run skill:cleanup first, then continue
+
+REPORT: "Preflight PASS — tofuwok up, repo registered, gh authenticated"
 ```
 
-Each state has:
-- **action**: what to do (bash command or API call)
-- **wait**: how to know it's done (poll function + timeout)
-- **verify**: assertions to check after completion
-- **recover**: what to do if the wait times out or the action fails
-- **max_retries**: how many times to retry before failing (default: 3)
+### skill:create-test-branch
 
-### Helper Library (`lib/`)
+```
+PURPOSE: Create a branch with terraform changes for testing
 
-Reusable bash functions that handle the hard parts:
+INPUTS: dirs (list of dirs to touch), run_id (unique identifier)
 
-#### `lib/wait.sh` — Async Polling
+STEPS:
+  cd $TARGET_REPO_PATH
+  git checkout main && git pull origin main
+  git checkout -b test-qa/$RUN_ID
+  for each dir in dirs:
+    echo "# $RUN_ID" >> $dir/variables.tf
+  git add -A
+  git commit -m "test: $RUN_ID"
+  git push -u origin test-qa/$RUN_ID
 
-```bash
-# wait_for_run: poll tofuwok until run reaches terminal state
-# Returns: JSON of completed run, or exits 1 on timeout
-# Recovery: if stuck >2x expected duration, cancel and retrigger
-wait_for_run() {
-  local owner=$1 repo=$2 pr=$3 dir=$4 run_type=$5
-  local timeout=${6:-300} interval=${7:-10}
-  local elapsed=0
-
-  while [ $elapsed -lt $timeout ]; do
-    local run=$(curl -sf "$TOFUWOK_API/api/v1/runs/$owner/$repo" \
-      | jq -r "[.[] | select(.pr_number==$pr and .dir==\"$dir\" and .run_type==\"$run_type\")] | sort_by(.started_at) | last")
-    local status=$(echo "$run" | jq -r '.status // "unknown"')
-
-    case $status in
-      success|failure|cancelled)
-        echo "$run"
-        return 0
-        ;;
-      running|pending)
-        sleep $interval
-        elapsed=$((elapsed + interval))
-        ;;
-      *)
-        sleep $interval
-        elapsed=$((elapsed + interval))
-        ;;
-    esac
-  done
-
-  echo '{"error":"timeout","elapsed":'$elapsed'}' >&2
-  return 1
-}
+OUTPUT: branch name
+CLEANUP: git push origin --delete test-qa/$RUN_ID
 ```
 
-#### `lib/gh.sh` — GitHub Operations with Recovery
+### skill:create-test-pr
 
-```bash
-# create_test_pr: create a PR with retry on failure
-# Handles: rate limits (429), server errors (500+), network errors
-create_test_pr() {
-  local repo=$1 branch=$2 title=$3 body=$4
-  local max_retries=3
+```
+PURPOSE: Open a PR and wait for the affected workflow to complete
 
-  for attempt in $(seq 1 $max_retries); do
-    local result=$(gh pr create --repo "$repo" \
-      --head "$branch" --base main \
-      --title "$title" --body "$body" 2>&1)
+INPUTS: branch, title
+
+STEPS:
+  PR_NUM=$(gh pr create --repo $TARGET_REPO --head $branch --base main --title "$title" --body "QA test $RUN_ID" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+')
+  
+  WAIT for "Tofuwok" workflow to complete (affected detection):
+    TIMEOUT: 90s, INTERVAL: 10s
+    POLL: gh run list --repo $TARGET_REPO --branch $branch --workflow affected.yaml --limit 1 --json status,conclusion
+    DONE when: status == "completed"
+    RECOVERY on timeout: check gh run list for errors, report and continue
+
+OUTPUT: PR_NUM
+```
+
+### skill:wait-for-plans
+
+```
+PURPOSE: Wait for tofuwok to dispatch and complete plan workflows
+
+INPUTS: pr_number, expected_dirs (list)
+
+STEPS:
+  TIMEOUT: 300s, INTERVAL: 15s
+  
+  POLL tofuwok runs API:
+    RUNS=$(curl -sf "$TOFUWOK_API/api/v1/runs/$OWNER/$REPO" -H "Authorization: Bearer $TOFUWOK_TOKEN")
+    PLAN_RUNS=$(echo $RUNS | jq "[.[] | select(.pr_number==$PR_NUM and .run_type==\"plan\")]")
     
-    if echo "$result" | grep -q "https://github.com"; then
-      local pr_num=$(echo "$result" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+')
-      echo "$pr_num"
-      return 0
-    fi
-
-    echo "Attempt $attempt failed: $result" >&2
-    sleep $((attempt * 5))
-  done
-
-  return 1
-}
-
-# wait_for_workflow: wait for a GHA workflow to complete
-# Uses gh run list with polling, not sleep loops
-wait_for_workflow() {
-  local repo=$1 workflow=$2 branch=$3 timeout=${4:-300}
-  local elapsed=0 interval=15
-
-  while [ $elapsed -lt $timeout ]; do
-    local run=$(gh run list --repo "$repo" --workflow="$workflow" \
-      --branch="$branch" --limit 1 \
-      --json databaseId,status,conclusion 2>/dev/null \
-      | jq '.[0] // empty')
+    CHECK each expected dir has a terminal run (success/failure):
+      COMPLETED=$(echo $PLAN_RUNS | jq "[.[] | select(.status==\"success\" or .status==\"failure\")] | length")
+      EXPECTED=${#expected_dirs[@]}
     
-    local status=$(echo "$run" | jq -r '.status // "unknown"')
-    
-    if [ "$status" = "completed" ]; then
-      echo "$run"
-      return 0
-    fi
+    DONE when: COMPLETED >= EXPECTED
 
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
+  RECOVERY on timeout:
+    Check which dirs are missing/stuck
+    For stuck runs (status=running for >2x timeout): 
+      Cancel via POST $TOFUWOK_API/api/v1/runs/{id}/cancel
+      Retrigger via POST $TOFUWOK_API/api/v1/trigger
+    Retry wait once
 
-  return 1
-}
+OUTPUT: JSON array of completed plan runs
 ```
 
-#### `lib/tofuwok.sh` — API Helpers with Recovery
+### skill:wait-for-applies
 
-```bash
-# tofuwok_api: curl wrapper with retry on 502/503
-tofuwok_api() {
-  local method=$1 path=$2 body=$3
-  local max_retries=3
+```
+PURPOSE: Wait for tofuwok to dispatch and complete apply workflows after merge
 
-  for attempt in $(seq 1 $max_retries); do
-    local http_code response
-    if [ -n "$body" ]; then
-      response=$(curl -sf -w '\n%{http_code}' -X "$method" \
-        -H "Authorization: Bearer $TOFUWOK_TOKEN" \
-        -H "Content-Type: application/json" \
-        "$TOFUWOK_API$path" -d "$body" 2>/dev/null)
-    else
-      response=$(curl -sf -w '\n%{http_code}' -X "$method" \
-        -H "Authorization: Bearer $TOFUWOK_TOKEN" \
-        "$TOFUWOK_API$path" 2>/dev/null)
-    fi
+INPUTS: pr_number, expected_dirs (list)
 
-    http_code=$(echo "$response" | tail -1)
-    body_out=$(echo "$response" | sed '$d')
+Same pattern as skill:wait-for-plans but filters for run_type=="apply"
 
-    case $http_code in
-      2*) echo "$body_out"; return 0 ;;
-      502|503) echo "Retry $attempt: $http_code" >&2; sleep $((attempt * 3)) ;;
-      409) echo "$body_out"; return 2 ;; # lock conflict, not an error
-      *) echo "$body_out"; return 1 ;;
-    esac
-  done
-
-  return 1
-}
-
-# cleanup_locks: force-release all locks for a repo
-cleanup_locks() {
-  local owner=$1 repo=$2
-  local locks=$(tofuwok_api GET "/api/v1/locks/$owner/$repo")
-  echo "$locks" | jq -c '.[]' | while read -r lock; do
-    local dir=$(echo "$lock" | jq -r '.dir')
-    local dir_enc=$(printf '%s' "$dir" | jq -sRr @uri)
-    tofuwok_api DELETE "/api/v1/locks/$owner/$repo?dir=$dir_enc&workspace=default&released_by=qa-agent"
-    echo "Released lock: $dir"
-  done
-}
+TIMEOUT: 300s (applies take longer)
 ```
 
-#### `lib/state.sh` — Scenario State Tracking
+### skill:verify-locks
 
-```bash
-# State is a JSON file: /tmp/qa-{scenario}-{run_id}.json
-init_state() {
-  local scenario=$1 run_id=$2
-  STATE_FILE="/tmp/qa-${scenario}-${run_id}.json"
-  echo '{"scenario":"'$scenario'","run_id":"'$run_id'","states":[],"current":0,"status":"running"}' > "$STATE_FILE"
-}
+```
+PURPOSE: Verify lock state matches expectations
 
-record_state() {
-  local name=$1 status=$2 output=$3
-  local tmp=$(mktemp)
-  jq --arg name "$name" --arg status "$status" --arg output "$output" --arg ts "$(date -Iseconds)" \
-    '.states += [{"name":$name,"status":$status,"output":$output,"completed_at":$ts}] | .current += 1' \
-    "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
-}
+INPUTS: expected_locks (list of {dir, pr_number, applied})
 
-get_state() {
-  cat "$STATE_FILE"
-}
+STEPS:
+  LOCKS=$(curl -sf "$TOFUWOK_API/api/v1/locks/$OWNER/$REPO" -H "Authorization: Bearer $TOFUWOK_TOKEN")
+  
+  For each expected lock:
+    LOCK=$(echo $LOCKS | jq ".[] | select(.dir==\"$dir\")")
+    ASSERT lock exists (or doesn't, if expected null)
+    ASSERT lock.pr_number == expected
+    ASSERT lock.applied == expected
+    ASSERT lock.lock_policy == "strict"
+
+OUTPUT: list of assertion results
+```
+
+### skill:verify-commit-statuses
+
+```
+PURPOSE: Verify GitHub commit statuses match expectations
+
+INPUTS: sha, expected_statuses (list of {context, state})
+
+STEPS:
+  STATUSES=$(gh api repos/$TARGET_REPO/commits/$sha/statuses)
+  
+  For each expected status:
+    ACTUAL=$(echo $STATUSES | jq -r ".[] | select(.context==\"$context\") | .state" | head -1)
+    ASSERT actual == expected
+
+OUTPUT: list of assertion results
+```
+
+### skill:verify-pr-comment
+
+```
+PURPOSE: Verify tofuwok posted a PR comment with expected content
+
+INPUTS: pr_number, expected_content (list of strings)
+
+STEPS:
+  COMMENTS=$(gh api repos/$TARGET_REPO/issues/$pr_number/comments)
+  LATEST=$(echo $COMMENTS | jq -r '.[-1].body')
+  
+  For each expected string:
+    ASSERT LATEST contains string
+
+OUTPUT: assertion results
+```
+
+### skill:merge-pr
+
+```
+PURPOSE: Merge a PR and wait for apply dispatch
+
+INPUTS: pr_number
+
+STEPS:
+  gh pr merge $pr_number --repo $TARGET_REPO --merge
+  
+  WAIT for "Tofuwok" workflow to trigger on merge (closed event):
+    TIMEOUT: 60s
+    POLL: gh run list --repo $TARGET_REPO --workflow affected.yaml --limit 1 --json status
+    DONE when: new run appears and completes
+
+OUTPUT: merge SHA
+```
+
+### skill:cleanup
+
+```
+PURPOSE: Clean up all test artifacts. ALWAYS runs, even on failure.
+
+STEPS:
+  # Close open test PRs
+  TEST_PRS=$(gh pr list --repo $TARGET_REPO --search "test-qa/" --state open --json number --jq '.[].number')
+  for pr in $TEST_PRS:
+    gh pr close $pr --repo $TARGET_REPO --delete-branch
+
+  # Delete remote test branches
+  BRANCHES=$(git -C $TARGET_REPO_PATH branch -r | grep "origin/test-qa/" | sed 's|origin/||')
+  for branch in $BRANCHES:
+    git -C $TARGET_REPO_PATH push origin --delete $branch
+
+  # Release orphan locks
+  LOCKS=$(curl -sf "$TOFUWOK_API/api/v1/locks/$OWNER/$REPO" -H "Authorization: Bearer $TOFUWOK_TOKEN")
+  echo $LOCKS | jq -c '.[]' | while read lock:
+    DIR=$(echo $lock | jq -r '.dir')
+    DIR_ENC=$(printf '%s' "$DIR" | jq -sRr @uri)
+    curl -sf -X DELETE "$TOFUWOK_API/api/v1/locks/$OWNER/$REPO?dir=$DIR_ENC&workspace=default&released_by=qa-cleanup" -H "Authorization: Bearer $TOFUWOK_TOKEN"
+
+  # Return to main
+  cd $TARGET_REPO_PATH && git checkout main
+```
+
+### skill:recover-stuck-run
+
+```
+PURPOSE: Recover from a run stuck in "running" state
+
+INPUTS: run_id
+
+STEPS:
+  # Check if GHA workflow is actually running
+  GHA_RUNS=$(gh run list --repo $TARGET_REPO --limit 20 --json databaseId,status,name)
+  
+  # If no matching GHA workflow is running, the tofuwok run is orphaned
+  # Cancel it so tofuwok allows retrigger
+  curl -sf -X POST "$TOFUWOK_API/api/v1/runs/$run_id/cancel" -H "Authorization: Bearer $TOFUWOK_TOKEN"
+  
+  # Wait 5s for cancellation to propagate
+  sleep 5
+
+OUTPUT: cancelled run ID
 ```
 
 ---
 
 ## Scenario Format
 
-Each scenario is a markdown file with structured frontmatter and a state list:
+Scenarios are markdown with structured sections. The agent parses them.
 
 ```markdown
-# Scenario: Single PR Plan + Apply + Merge
-
+---
+name: single-dir-plan-apply-merge
 tier: t2
 timeout: 300
 target_repo: jerny-stoiclane/terraform-orchestrator-gha
+---
+
+# Single Dir: Plan → Apply → Merge
+
+## Setup
 dirs:
   - test/companies/bravo/snowflake
 
-## States
+## Phases
 
-### 1. create-branch
-action: |
-  git checkout main && git pull
-  git checkout -b test-qa/{{RUN_ID}}
-  echo '# {{RUN_ID}}' >> test/companies/bravo/snowflake/variables.tf
-  git add -A && git commit -m "test: {{RUN_ID}}"
-  git push -u origin test-qa/{{RUN_ID}}
-cleanup: git push origin --delete test-qa/{{RUN_ID}}
+### Phase 1: Create PR
+skill: create-test-branch
+  dirs: [test/companies/bravo/snowflake]
+skill: create-test-pr
+  title: "[qa] single dir plan+apply"
+→ captures: PR_NUMBER, BRANCH, HEAD_SHA
 
-### 2. create-pr
-action: |
-  gh pr create --repo {{REPO}} --head test-qa/{{RUN_ID}} --base main \
-    --title "[qa] {{SCENARIO}} — {{RUN_ID}}" \
-    --body "Automated QA test"
-output: PR_NUMBER
+### Phase 2: Verify Plan
+skill: wait-for-plans
+  pr_number: {{PR_NUMBER}}
+  expected_dirs: [test/companies/bravo/snowflake]
+skill: verify-locks
+  expected: [{dir: "test/companies/bravo/snowflake", pr_number: {{PR_NUMBER}}, applied: false}]
+skill: verify-commit-statuses
+  sha: {{HEAD_SHA}}
+  expected: [{context: "tofuwok/plan/test/companies/bravo/snowflake", state: "success"}]
 
-### 3. wait-affected
-wait: workflow_complete
-workflow: affected.yaml
-branch: test-qa/{{RUN_ID}}
-timeout: 60
+### Phase 3: Merge + Apply
+skill: merge-pr
+  pr_number: {{PR_NUMBER}}
+→ captures: MERGE_SHA
+skill: wait-for-applies
+  pr_number: {{PR_NUMBER}}
+  expected_dirs: [test/companies/bravo/snowflake]
+skill: verify-locks
+  expected: [{dir: "test/companies/bravo/snowflake", pr_number: null}]  # released after apply+merge
 
-### 4. wait-plan
-wait: tofuwok_run
-run_type: plan
-pr: {{PR_NUMBER}}
-dir: test/companies/bravo/snowflake
-timeout: 180
-
-### 5. verify-plan
-assert:
-  - run.status == "success"
-  - run.has_changes == true
-  - lock.pr_number == {{PR_NUMBER}}
-  - commit_status("tofuwok/plan/test/companies/bravo/snowflake") == "success"
-
-### 6. merge-pr
-action: gh pr merge {{PR_NUMBER}} --repo {{REPO}} --merge
-
-### 7. wait-apply
-wait: tofuwok_run
-run_type: apply
-pr: {{PR_NUMBER}}
-dir: test/companies/bravo/snowflake
-timeout: 180
-
-### 8. verify-apply
-assert:
-  - run.status == "success"
-  - lock.applied == true
-  - commit_status("tofuwok/apply/test/companies/bravo/snowflake") == "success"
-
-### 9. verify-cleanup
-assert:
-  - lock == null  # released after merge+apply
-  - pr.state == "closed"
-
-## Cleanup
-- git push origin --delete test-qa/{{RUN_ID}}
-```
-
----
-
-## Agent Definition
-
-### `.claude/agents/qa.md`
-
-The agent:
-1. Reads scenario files from `scenarios/`
-2. Sources `lib/*.sh` for helpers
-3. Parses scenario into state list
-4. Executes each state with retry/recovery
-5. Writes results to `results/`
-6. Never asks user mid-scenario — runs to completion or failure
-
-### Key Behaviors
-
-**Autonomous execution:**
-- Given a scenario name, run it end-to-end
-- On transient failure (502, timeout): retry with backoff (max 3)
-- On permanent failure (assertion mismatch): record bug, continue to cleanup
-- On stuck state (>2x timeout): force cancel/release, skip to cleanup
-
-**Cleanup always runs:**
-- Delete test branches
-- Close test PRs (if not merged)
-- Release orphan locks
-- Cleanup runs even if scenario failed
-
-**No conversation mid-scenario:**
-- Agent outputs progress lines, not questions
-- If something unexpected happens, log it and continue
-- Only ask user when: choosing which scenarios to run, or confirming T3+ tier
-
-**Structured output:**
-```json
-{
-  "scenario": "single-pr-plan-apply",
-  "run_id": "20260416-234500-a1b2",
-  "status": "pass",
-  "duration_s": 185,
-  "states": [
-    {"name": "create-branch", "status": "pass", "duration_s": 3},
-    {"name": "wait-plan", "status": "pass", "duration_s": 95}
-  ],
-  "assertions": {
-    "total": 8,
-    "passed": 8,
-    "failed": 0
-  },
-  "bugs": []
-}
+### Cleanup
+skill: cleanup
 ```
 
 ---
@@ -373,48 +376,41 @@ The agent:
 
 ### T1: Smoke
 
-| Scenario | What it tests |
-|---|---|
-| `api-health` | Tofuwok API responds, repo registered, execution_mode=gha |
-| `gh-access` | gh CLI can read/write to target repo |
+| Scenario | File | What |
+|---|---|---|
+| `api-health` | `t1-smoke/api-health.md` | Tofuwok healthy, repo registered, execution_mode=gha |
+| `gh-access` | `t1-smoke/gh-access.md` | gh can read/write target repo, list workflows |
+| `clean-state` | `t1-smoke/clean-state.md` | No stale locks, no open test PRs |
 
-### T2: Single PR
+### T2: Single PR Lifecycle
 
-| Scenario | What it tests |
-|---|---|
-| `single-dir-plan` | One dir changed → affected detected → plan dispatched → plan succeeds → lock acquired |
-| `multi-dir-plan` | All dirs changed → 6 plans dispatched → all succeed → all locks acquired |
-| `plan-apply-merge` | Plan → merge → apply dispatched → apply succeeds → lock released |
-| `plan-failure` | Bad terraform → plan fails → error surfaced in PR comment |
-| `stale-plan-replan` | Push new commit → old plan superseded → new plan runs |
+| Scenario | File | What |
+|---|---|---|
+| `single-dir-plan` | `t2-single-pr/single-dir-plan.md` | 1 dir → affected → plan dispatched → plan succeeds → lock acquired |
+| `multi-dir-plan` | `t2-single-pr/multi-dir-plan.md` | 6 dirs → 6 plans dispatched → all succeed → 6 locks |
+| `plan-apply-merge` | `t2-single-pr/plan-apply-merge.md` | Plan → merge → apply → lock released |
+| `full-cycle` | `t2-single-pr/full-cycle.md` | Plan → merge → apply → verify comment + status + lock cleanup |
 
 ### T3: Multi-PR Lock Contention
 
-| Scenario | What it tests |
-|---|---|
-| `lock-conflict` | PR #1 locks dir A → PR #2 touches dir A → PR #2 plan sees 409 → PR #2 merge blocked |
-| `lock-release-replan` | PR #1 merges+applies → lock released → PR #2 branch updated → PR #2 re-plans → lock acquired |
-| `overlapping-dirs` | PR #1 touches A+B, PR #2 touches B+C → B is contested, A and C are free |
-
-### T4: Edge Cases
-
-| Scenario | What it tests |
-|---|---|
-| `backend-502-recovery` | Tofuwok goes down during plan → plan retried after recovery |
-| `orphan-lock-cleanup` | PR closed without merge → locks released |
-| `rapid-push` | 3 pushes in 10 seconds → only latest plan runs (supersession) |
+| Scenario | File | What |
+|---|---|---|
+| `lock-conflict` | `t3-multi-pr/lock-conflict.md` | PR1 locks dir → PR2 plan sees conflict → PR2 lock blocked |
+| `lock-release-replan` | `t3-multi-pr/lock-release-replan.md` | PR1 merge+apply → lock released → PR2 re-plans → PR2 lock acquired |
+| `overlapping-dirs` | `t3-multi-pr/overlapping-dirs.md` | PR1 has A+B, PR2 has B+C → B contested, A+C free |
 
 ---
 
 ## Configuration
 
-```bash
-# env vars the agent needs
+```
+# .env or CLAUDE.md
 TOFUWOK_API=https://tofuwok.armhr.dev
 TOFUWOK_TOKEN=twk_...
 TARGET_REPO=jerny-stoiclane/terraform-orchestrator-gha
 TARGET_REPO_PATH=~/stoiclane/tf-orchestrator-gha
-QA_BRANCH_PREFIX=test-qa/
+OWNER=jerny-stoiclane
+REPO=terraform-orchestrator-gha
 ```
 
 ---
@@ -423,29 +419,23 @@ QA_BRANCH_PREFIX=test-qa/
 
 | File | Purpose |
 |------|---------|
-| `.claude/agents/qa.md` | Agent definition |
-| `lib/wait.sh` | Polling + timeout helpers |
-| `lib/gh.sh` | GitHub CLI wrappers with retry |
-| `lib/tofuwok.sh` | Tofuwok API helpers with recovery |
-| `lib/state.sh` | Scenario state tracking |
-| `lib/assert.sh` | Assertion helpers (check run status, lock state, commit statuses) |
-| `scenarios/t1-smoke/*.md` | Smoke test scenarios |
-| `scenarios/t2-single-pr/*.md` | Single PR lifecycle scenarios |
-| `scenarios/t3-multi-pr/*.md` | Multi-PR lock contention scenarios |
-| `scenarios/t4-edge-cases/*.md` | Edge case scenarios |
-| `results/` | Test results (JSON + markdown) |
-| `CLAUDE.md` | Project context for the agent |
+| `.claude/agents/qa.md` | Agent definition with inline skills |
+| `CLAUDE.md` | Project context, config, conventions |
+| `scenarios/t1-smoke/*.md` | Smoke scenarios |
+| `scenarios/t2-single-pr/*.md` | Single PR scenarios |
+| `scenarios/t3-multi-pr/*.md` | Multi-PR scenarios |
+| `results/` | Test results (markdown) |
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] Agent runs `t1-smoke/api-health` without human intervention
-- [ ] Agent runs `t2-single-pr/single-dir-plan` end-to-end: create PR → wait for plan → verify → cleanup
-- [ ] Agent recovers from tofuwok 502 without asking user
-- [ ] Agent recovers from stuck run (cancel + retrigger) without asking user
-- [ ] Agent cleans up test branches and PRs even on failure
-- [ ] Agent writes structured JSON results for every scenario
-- [ ] Agent files bugs (markdown in results/) on assertion failure
-- [ ] T3 lock contention scenario: 2 PRs, lock conflict detected, merge blocked, release + replan works
-- [ ] Agent completes a full T1+T2 run in under 15 minutes
+- [ ] `qa run t1-smoke/api-health` completes without human intervention
+- [ ] `qa run t2-single-pr/single-dir-plan` creates PR, waits for plan, verifies lock, cleans up — no questions asked
+- [ ] `qa run t2-single-pr/plan-apply-merge` does full cycle: PR → plan → merge → apply → verify → cleanup
+- [ ] Agent recovers from tofuwok 502 (retry 3x with backoff)
+- [ ] Agent recovers from stuck tofuwok run (cancel + retrigger)
+- [ ] Agent cleans up test branches, PRs, and locks even on failure
+- [ ] Agent produces markdown result file with pass/fail per assertion
+- [ ] T3 lock contention: 2 PRs, conflict detected, block verified, release + replan works
+- [ ] Full T1+T2 suite completes in under 10 minutes
