@@ -108,7 +108,26 @@ curl -sf http://localhost:8080/swagger/doc.json | jq '.paths["/api/v1/{endpoint}
 Artifacts from previous scenario were already cleaned up during the PASS flow (merge + apply + cleanup). Next scenario starts on a clean slate.
 
 **Tier boundaries (`qa all`):**
-Run all-t1 → all-t2 automatically. Ask before starting all-t3 (multi-PR creates multiple PRs).
+Run all-t0 → all-t1 → all-t2 automatically. Ask before starting all-t3 (multi-PR creates multiple PRs).
+
+### T2 Execution Order
+
+When running `qa all-t2`, execute in this order (safest first, most likely to break last):
+
+1. `t2-single-pr/no-changes` — simplest, no state changes
+2. `t2-single-pr/single-dir-plan` — basic plan+apply+merge
+3. `t2-single-pr/plan-apply-merge` — full lifecycle assertions
+4. `t2-single-pr/multi-dir-plan` — 6 dirs, heavier but straightforward
+5. `t2-errors/syntax-error` — plan failure, no state changes
+6. `t2-errors/missing-provider` — plan failure, no state changes
+7. `t2-locks/acquire-release` — lock lifecycle
+8. `t2-locks/force-release` — force release + re-plan
+9. `t2-lifecycle/pr-close` — close without merge
+10. `t2-lifecycle/pr-synchronize` — new push triggers re-plan
+11. `t2-single-pr/apply-stale-sha` — stale plan rejection (multi-commit)
+12. `t2-single-pr/destroy-detection` — depends on state from prior apply
+13. `t2-single-pr/rapid-commits` — 3 rapid pushes, supersession (most likely to break)
+14. `t2-lifecycle/base-branch-update` — two PRs, stale plan (most complex T2)
 
 **Do not commit results.** Results files accumulate in `results/` during the session. The user decides when to commit.
 
