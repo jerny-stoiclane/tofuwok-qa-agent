@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl *tofuwok*)",
+      "Bash(curl *armhr.dev*)",
+      "Bash(gh pr *)",
+      "Bash(gh api *)",
+      "Bash(gh run *)",
+      "Bash(gh repo *)",
+      "Bash(gh auth *)",
+      "Bash(gh variable *)",
+      "Bash(git *)",
+      "Bash(cd *)",
+      "Bash(sleep *)",
+      "Bash(jq *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(echo *)",
+      "Bash(date *)",
+      "Bash(START=*)"
+    ]
+  }
+}
