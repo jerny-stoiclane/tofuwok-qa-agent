@@ -2,6 +2,81 @@
 
 Autonomous E2E testing agent for tofuwok + tf-orchestrator-gha integration.
 
+## How to Run
+
+### Option A: Interactive (recommended for first runs)
+
+```bash
+cd ~/stoiclane/tofuwok-qa
+claude
+```
+
+Then in the session, @-mention the agent:
+
+```
+@qa run t1-smoke/api-health
+```
+
+You'll see each Bash command and can approve/deny via Claude Code's permission system.
+
+### Option B: Headless via CLI
+
+```bash
+cd ~/stoiclane/tofuwok-qa
+claude -p "run t1-smoke/api-health" --agent qa
+```
+
+### Option C: Fully non-interactive (CI-friendly)
+
+```bash
+cd ~/stoiclane/tofuwok-qa
+claude --bare -p "run t2-single-pr/plan-apply-merge" --agent qa --allowedTools "Read,Write,Bash,Glob,Grep"
+```
+
+`--bare` skips environment discovery for faster, reproducible runs.
+
+### 3. Available commands
+
+| Command | What it does |
+|---------|-------------|
+| `run t1-smoke/api-health` | Smoke test — check tofuwok API, repo registration, gh access |
+| `run t2-single-pr/single-dir-plan` | Create PR with 1 dir change, verify plan + lock |
+| `run t2-single-pr/multi-dir-plan` | Create PR with all 6 dirs, verify all plans + locks |
+| `run t2-single-pr/plan-apply-merge` | Full cycle: plan → merge → apply → verify cleanup |
+| `run t3-multi-pr/lock-conflict` | Two PRs same dir, verify lock conflict blocks second PR |
+| `run t3-multi-pr/lock-release-replan` | Full contention cycle: lock → conflict → release → replan |
+| `run all-t1` | Run all T1 scenarios sequentially |
+| `run all-t2` | Run all T2 scenarios sequentially |
+| `cleanup` | Close test PRs, delete branches, release locks |
+| `status` | Check tofuwok API, list locks and open test PRs |
+
+### 4. Permissions
+
+Claude Code will prompt you to approve each Bash command (git push, gh pr create, curl, etc.). This is your safety net — the agent won't ask "should I continue?" but you gate each shell command.
+
+To run fully hands-off, pre-approve Bash in your Claude Code settings. For first runs, leave permissions on so you can watch.
+
+### 5. Prerequisites
+
+Before running scenarios:
+
+- **Tofuwok backend running** with cloudflare tunnel active (`https://tofuwok.armhr.dev/health` returns "ok")
+- **`terraform-orchestrator-gha` repo** has tofuwok workflows on main (`affected.yaml`, `tofuwok-plan.yaml`, `tofuwok-apply.yaml`)
+- **Repo registered in tofuwok** with `execution_mode: "gha"` and GitHub App installed
+- **`gh` CLI authenticated** with access to `jerny-stoiclane/terraform-orchestrator-gha`
+
+The agent's preflight check verifies all of this before running any scenario.
+
+### 6. Results
+
+After each scenario, results are written to:
+
+```
+results/{scenario-name}-{YYYYMMDD-HHMMSS}.md
+```
+
+The agent prints a one-line summary per phase and a final pass/fail at the end.
+
 ## Configuration
 
 ```
@@ -11,26 +86,15 @@ TARGET_REPO=jerny-stoiclane/terraform-orchestrator-gha
 TARGET_REPO_PATH=/Users/jernz/stoiclane/tf-orchestrator-gha
 OWNER=jerny-stoiclane
 REPO=terraform-orchestrator-gha
-QA_BRANCH_PREFIX=test-qa/
 ```
 
-## Usage
-
-Invoke the QA agent:
-```
-@qa run t1-smoke/api-health
-@qa run t2-single-pr/single-dir-plan
-@qa run t2-single-pr/plan-apply-merge
-@qa run t3-multi-pr/lock-conflict
-@qa run all-t1
-@qa run all-t2
-@qa cleanup
-```
+These are hardcoded in the agent definition. To test against a different repo, edit `.claude/agents/qa.md`.
 
 ## Conventions
 
 - Test branches: `test-qa/{run-id}`
 - PR titles: `[qa] {scenario} — {run-id}`
-- Results: `results/{scenario}-{timestamp}.md`
-- Agent never closes PRs — only merges (to test apply) or leaves for cleanup
+- Results: `results/{scenario-name}-{timestamp}.md`
+- Agent never closes PRs mid-scenario — only merges (to test apply) or leaves for cleanup
 - Cleanup always runs even on failure
+- Cleanup is the ONE place where test PRs are closed
