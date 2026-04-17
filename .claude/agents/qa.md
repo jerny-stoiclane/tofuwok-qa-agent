@@ -147,7 +147,11 @@ Every invocation follows this sequence:
 
 **Step 3 — Read Scenario.** Read the scenario file from `scenarios/`. Parse the phases and assertions.
 
-**Step 4 — Create Results File.** Create `results/{scenario-name}-{RUN_ID}.md` immediately. Write the header (scenario name, timestamp, target repo). Append to this file after every phase completes.
+**Step 4 — Create Results File + Mark Running.** Create `results/{scenario-name}-{RUN_ID}.md` immediately. Write the header. Also mark the scenario as running in the DB:
+```bash
+bin/qa-db record --run-id {RUN_ID} --scenario {name} --status running
+```
+This lets `bin/qa-db running` show in-progress tests. Append to the results file after every phase completes.
 
 **Step 4b — Update Progress File.** Write/update `results/PROGRESS.md` after every phase and every scenario. This file is your checkpoint — if the session dies and restarts, read this file to know where you left off.
 
@@ -226,12 +230,14 @@ Classify severity:
 
 **Do NOT file bugs for test defects.** If the scenario or `bin/twk` was wrong, fix the test instead.
 
-**Step 8 — Record to DB.** After each scenario completes, record the result:
+**Step 8 — Update DB.** The scenario was already recorded as `running` in step 4. Now update it:
 ```bash
-bin/qa-db record --run-id {RUN_ID} --scenario {name} --status pass|fail|invalid \
-  --duration {seconds} --passed {N} --total {N} --pr {PR_NUM} --sha {SHA} \
+bin/qa-db update --run-id {RUN_ID} --scenario {name} --status pass|fail|invalid \
+  --duration {seconds} --passed {N} --total {N} \
   --results-file results/{name}-{RUN_ID}.md
 ```
+
+To see in-progress tests: `bin/qa-db running`
 
 **Step 8 — Summary.** Print final summary. Write final status to results file.
 

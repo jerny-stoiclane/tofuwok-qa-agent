@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
   scenario TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pass', 'fail', 'invalid')),
+  status TEXT NOT NULL CHECK (status IN ('pass', 'fail', 'invalid', 'running')),
   duration_s INTEGER,
   assertions_passed INTEGER DEFAULT 0,
   assertions_total INTEGER DEFAULT 0,
@@ -81,6 +81,51 @@ case "$CMD" in
       VALUES ('$RUN_ID', '$SCENARIO', '$STATUS', ${DURATION:-NULL}, ${PASSED:-0}, ${TOTAL:-0}, ${PR:-NULL}, '${SHA:-}', '${NOTES:-}', '${RESULTS:-}');"
 
     echo "Recorded: $SCENARIO $STATUS (run $RUN_ID)"
+    ;;
+
+  update)
+    # Update an existing run (e.g., running → pass/fail)
+    [ -f "$DB" ] || { echo "No database."; exit 1; }
+    RUN_ID="" SCENARIO="" STATUS="" DURATION="" PASSED="" TOTAL="" NOTES="" RESULTS=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --run-id) RUN_ID=$2; shift 2 ;;
+        --scenario) SCENARIO=$2; shift 2 ;;
+        --status) STATUS=$2; shift 2 ;;
+        --duration) DURATION=$2; shift 2 ;;
+        --passed) PASSED=$2; shift 2 ;;
+        --total) TOTAL=$2; shift 2 ;;
+        --notes) NOTES=$2; shift 2 ;;
+        --results-file) RESULTS=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    [ -z "$RUN_ID" ] && [ -z "$SCENARIO" ] && { echo "ERROR: --run-id or --scenario required"; exit 1; }
+
+    SET_CLAUSES=""
+    [ -n "$STATUS" ] && SET_CLAUSES="status='$STATUS'"
+    [ -n "$DURATION" ] && SET_CLAUSES="$SET_CLAUSES${SET_CLAUSES:+,} duration_s=$DURATION"
+    [ -n "$PASSED" ] && SET_CLAUSES="$SET_CLAUSES${SET_CLAUSES:+,} assertions_passed=$PASSED"
+    [ -n "$TOTAL" ] && SET_CLAUSES="$SET_CLAUSES${SET_CLAUSES:+,} assertions_total=$TOTAL"
+    [ -n "$NOTES" ] && SET_CLAUSES="$SET_CLAUSES${SET_CLAUSES:+,} notes='$NOTES'"
+    [ -n "$RESULTS" ] && SET_CLAUSES="$SET_CLAUSES${SET_CLAUSES:+,} results_file='$RESULTS'"
+
+    WHERE="1=1"
+    [ -n "$RUN_ID" ] && WHERE="$WHERE AND run_id='$RUN_ID'"
+    [ -n "$SCENARIO" ] && WHERE="$WHERE AND scenario='$SCENARIO'"
+
+    sqlite3 "$DB" "UPDATE runs SET $SET_CLAUSES WHERE $WHERE AND status='running';"
+    echo "Updated: ${SCENARIO:-$RUN_ID} → $STATUS"
+    ;;
+
+  running)
+    # Show in-progress tests
+    [ -f "$DB" ] || { echo "No database."; exit 1; }
+    sqlite3 -header -column "$DB" \
+      "SELECT run_id, scenario, pr_number as pr, started_at,
+              CAST((julianday('now') - julianday(started_at)) * 86400 AS INTEGER) || 's' as elapsed
+       FROM runs WHERE status='running' ORDER BY started_at DESC;"
     ;;
 
   history)
