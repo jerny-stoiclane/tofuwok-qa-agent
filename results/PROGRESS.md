@@ -1,16 +1,16 @@
 # QA Progress
 
-- Run ID: 20260417-125730
-- Status: completed
-- Current: done
+- Run ID: 20260417-134457
+- Status: running
+- Current: t2-single-pr/plan-apply-merge (phase 1/7)
 
 ## Active Artifacts
-- None
+- Branch: test-qa/20260417-134457
+- PR: (pending)
+- HEAD SHA: (pending)
 
 ## Completed
-- [x] t2-single-pr/multi-dir-plan — PASS (8/8 assertions, 6/6 applies)
+- (none yet)
 
-## Findings
-- Trigger API: `action` not `run_type`, `sha` not `commit_sha`
-- Omit `dir` to auto-detect all dirs from PR diff (preferred for multi-dir)
-- bin/twk trigger had WORKSPACE unbound variable — fixed
+## Remaining
+- [ ] t2-single-pr/plan-apply-merge ← current
