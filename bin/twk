@@ -22,8 +22,18 @@ REPO="terraform-orchestrator-gha"
 api() {
   local method=$1 path=$2
   shift 2
-  curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" \
-    -X "$method" "$TOFUWOK_API/api/v1$path" "$@" 2>/dev/null | tr -d '\000-\037'
+  local response http_code
+  response=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $TOFUWOK_TOKEN" \
+    -X "$method" "$TOFUWOK_API/api/v1$path" "$@" 2>/dev/null)
+  http_code=$(echo "$response" | tail -1)
+  local body
+  body=$(echo "$response" | sed '$d' | tr -d '\000-\037')
+
+  if [[ "$http_code" =~ ^[45] ]]; then
+    echo "$body" >&2
+    return 1
+  fi
+  echo "$body"
 }
 
 api_json() {
