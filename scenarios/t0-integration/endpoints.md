@@ -51,6 +51,7 @@ Assert: returns object or empty `{}`, no errors
 curl -sf -H "Authorization: Bearer $TOFUWOK_TOKEN" "$TOFUWOK_API/api/v1/stacks" | tr -d '\000-\037' | jq '.'
 ```
 Assert: returns JSON with data array, each entry has owner, repo, dir, workspace, last_run_status
+Assert: each stack entry should include terraform engine (terraform vs opentofu) and version (e.g., "1.14.4", "1.9.1"). If these fields are missing, file as a tofuwok feature request — stacks endpoint should surface the TF engine and version used for each dir.
 
 ### Phase 8: PRs
 ```bash
