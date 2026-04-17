@@ -78,18 +78,26 @@ case "$CMD" in
     ;;
 
   trigger)
-    PR="" DIR="" TYPE="" SHA="" BRANCH=""
+    PR="" DIR="" ACTION="" SHA="" BRANCH="" WORKSPACE=""
     while [[ $# -gt 0 ]]; do
       case $1 in
         --pr) PR=$2; shift 2 ;;
         --dir) DIR=$2; shift 2 ;;
-        --type) TYPE=$2; shift 2 ;;
+        --action) ACTION=$2; shift 2 ;;
+        --type) ACTION=$2; shift 2 ;; # alias for --action
         --sha) SHA=$2; shift 2 ;;
         --branch) BRANCH=$2; shift 2 ;;
         *) shift ;;
       esac
     done
-    api_json POST "/trigger" -d "{\"owner\":\"$OWNER\",\"repo\":\"$REPO\",\"dir\":\"$DIR\",\"workspace\":\"default\",\"pr_number\":$PR,\"commit_sha\":\"$SHA\",\"branch\":\"$BRANCH\",\"run_type\":\"$TYPE\",\"triggered_by\":\"qa-agent\"}" | jq .
+    # Build JSON — dir is optional (empty = auto-detect from PR diff)
+    BODY="{\"owner\":\"$OWNER\",\"repo\":\"$REPO\",\"action\":\"$ACTION\",\"pr_number\":$PR"
+    [ -n "$DIR" ] && BODY="$BODY,\"dir\":\"$DIR\""
+    [ -n "$SHA" ] && BODY="$BODY,\"sha\":\"$SHA\""
+    [ -n "$BRANCH" ] && BODY="$BODY,\"branch\":\"$BRANCH\""
+    [ -n "$WORKSPACE" ] && BODY="$BODY,\"workspace\":\"$WORKSPACE\""
+    BODY="$BODY}"
+    api_json POST "/trigger" -d "$BODY" | jq .
     ;;
 
   cancel)

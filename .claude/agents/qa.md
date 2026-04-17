@@ -53,7 +53,7 @@ Full Swagger docs: `http://localhost:8080/swagger/index.html` (or fetch `http://
 | `POST` | `/runs/{runID}/cancel` | Cancel a stuck run |
 | `GET` | `/runs/{runID}/logs` | Get step-by-step execution logs |
 | `GET` | `/runs/{runID}/events` | Get run state transition events |
-| `POST` | `/trigger` | Trigger plan or apply for a single dir |
+| `POST` | `/trigger` | Trigger plan or apply. Body: `{action: "plan"|"apply", pr_number, owner, repo}`. Dir optional (auto-detects from PR diff). Returns 409 on lock conflict. |
 | `GET` | `/repos` | List registered repos (check execution_mode) |
 | `GET` | `/stacks` | List all stacks across repos (last run status per dir) |
 | `GET` | `/prs` | List all PRs across repos |
@@ -249,18 +249,22 @@ Poll: `GET /api/v1/runs/{owner}/{repo}?pr_number={N}`
 **All tofuwok API interaction MUST go through `bin/twk`.** Never write inline curl/jq polling loops. The CLI handles auth, control character stripping, field selection, and error handling.
 
 ```bash
-bin/twk health                                        # Check API
-bin/twk repos                                         # List repos + config
-bin/twk runs --pr 9 --type plan                       # List plan runs for PR
-bin/twk runs --pr 9 --type plan --dir DIR             # Filter by dir
-bin/twk locks                                         # List all locks
-bin/twk locks --dir test/companies/bravo/snowflake    # Check specific lock
-bin/twk trigger --pr 9 --dir DIR --type apply --sha SHA --branch BRANCH
-bin/twk cancel --run-id UUID                          # Cancel stuck run
-bin/twk wait-plans --pr 9 --dirs DIR1,DIR2 --timeout 300
-bin/twk wait-applies --pr 9 --dirs DIR1,DIR2 --timeout 300
-bin/twk cleanup                                       # Nuclear cleanup
+bin/twk health                                            # Check API is up
+bin/twk repos                                             # List repos + execution_mode
+bin/twk runs --pr 9 --type plan                           # List plan runs for PR
+bin/twk runs --pr 9 --type apply --dir DIR                # Filter by dir + type
+bin/twk locks                                             # List all locks
+bin/twk locks --dir test/companies/bravo/snowflake        # Check specific lock
+bin/twk trigger --pr 9 --action plan                      # Trigger plan (auto-detect dirs from PR diff)
+bin/twk trigger --pr 9 --action apply                     # Trigger apply (auto-detect dirs)
+bin/twk trigger --pr 9 --action apply --dir DIR --sha SHA # Trigger apply for specific dir
+bin/twk cancel --run-id UUID                              # Cancel stuck run
+bin/twk wait-plans --pr 9 --dirs DIR1,DIR2 --timeout 300  # Poll until plans done
+bin/twk wait-applies --pr 9 --dirs DIR1,DIR2 --timeout 300 # Poll until applies done
+bin/twk cleanup                                           # Nuclear cleanup: close PRs, delete branches, release locks
 ```
+
+**Trigger uses `--action plan|apply`** (not `--type`). `--dir` is optional — when empty, tofuwok auto-detects affected dirs from the PR diff.
 
 **Never write raw `curl` to the tofuwok API.** If `bin/twk` doesn't support what you need, say so — don't work around it with inline bash.
 
