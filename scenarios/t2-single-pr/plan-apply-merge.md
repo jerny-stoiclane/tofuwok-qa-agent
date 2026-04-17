@@ -6,9 +6,9 @@ dirs:
   - test/companies/bravo/snowflake
 ---
 
-# Full Cycle: Plan → Merge → Apply
+# Full Cycle: Plan → Apply → Merge
 
-Tests the complete lifecycle: PR created → plan succeeds → lock acquired → PR merged → apply dispatched → apply succeeds → lock released.
+Tests the complete lifecycle: PR created → plan succeeds → lock acquired → apply triggered → apply succeeds → lock marked applied → PR merged → lock released.
 
 ## Phases
 
@@ -38,16 +38,24 @@ POST /api/v1/trigger with run_type=apply for test/companies/bravo/snowflake
 Poll tofuwok runs API for apply run with terminal status.
 Timeout: 300s
 
-### Phase 5: Verify Apply Results via Tofuwok API
+### Phase 5: Verify Apply Results
 
-Assert apply run (runs API):
+Assert apply run (tofuwok runs API):
 - Run exists with status=success, run_type=apply, dir=test/companies/bravo/snowflake
 
-Assert lock (locks API):
+Assert lock (tofuwok locks API) — **check BEFORE merging**:
 - Lock exists with applied=true
 
-Assert commit status (GitHub API — set by tofuwok):
-- tofuwok/apply/test/companies/bravo/snowflake == success
+Assert apply status via **GitHub Check Runs API** (not commit statuses):
+```bash
+gh api repos/{owner}/{repo}/commits/{sha}/check-runs \
+  --jq '.check_runs[] | select(.name | contains("apply")) | {name, conclusion}'
+```
+- Check run `tofuwok/apply` exists with conclusion=success
+- Check run `tofuwok/apply/test/companies/bravo/snowflake` exists with conclusion=success
+
+Note: tofuwok posts **plan** results as commit statuses (`tofuwok/plan`) and **apply** results
+as GitHub Check Runs (`tofuwok/apply`, `tofuwok/apply/{dir}`).
 
 ### Phase 6: Merge PR
 Apply succeeded — merge to land code on main.
@@ -57,7 +65,7 @@ gh pr merge PR_NUMBER --repo TARGET_REPO --merge
 Captures: MERGE_SHA
 
 ### Phase 7: Verify Lock Released After Merge
-Assert lock (locks API):
+Assert lock (tofuwok locks API):
 - No lock exists for test/companies/bravo/snowflake (released on merge event)
 
 ### Cleanup

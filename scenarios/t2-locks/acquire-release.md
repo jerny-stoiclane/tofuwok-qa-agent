@@ -32,10 +32,16 @@ bin/twk trigger --pr PR_NUMBER --action apply
 ```
 Wait for apply to complete.
 
-### Phase 5: Verify Lock Applied
-Assert:
+### Phase 5: Verify Lock Applied + Apply Check Runs
+Assert lock (tofuwok locks API) — **check BEFORE merging**:
 - Lock still exists (not yet released — need merge)
 - lock.applied == true
+
+Assert apply status via **GitHub Check Runs API** (not commit statuses):
+- Check run `tofuwok/apply` exists with conclusion=success
+- Check run `tofuwok/apply/test/companies/bravo/snowflake` exists with conclusion=success
+
+Note: tofuwok posts plan results as commit statuses, but apply results as GitHub Check Runs.
 
 ### Phase 6: Merge PR
 ```bash

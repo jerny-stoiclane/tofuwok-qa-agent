@@ -257,6 +257,21 @@ For **Verify** phases:
 - Record pass/fail for each
 - A failed assertion does NOT stop the scenario — continue and report all results
 
+### Verification Hierarchy — TOFUWOK API IS SOURCE OF TRUTH
+
+Always verify through tofuwok first. GitHub is secondary.
+
+| What to verify | Primary (tofuwok API) | Secondary (GitHub API) |
+|---|---|---|
+| Plan succeeded | `bin/twk runs --pr N --type plan` → status=success | Commit statuses: `gh api commits/{sha}/statuses` → `tofuwok/plan` |
+| Apply succeeded | `bin/twk runs --pr N --type apply` → status=success | Check Runs: `gh api commits/{sha}/check-runs` → `tofuwok/apply` |
+| Lock state | `bin/twk locks --dir X` → pr_number, applied | N/A |
+| PR comment | N/A (tofuwok posts it) | `gh api issues/{pr}/comments` |
+
+**Always check tofuwok API first.** Only check GitHub to verify tofuwok's GitHub integration posted correctly. If tofuwok says success but GitHub shows nothing, that's a **tofuwok bug** (GitHub integration broken), not a scenario failure.
+
+**GitHub uses two different APIs for status — plan uses commit statuses, apply uses check runs.** If you check the wrong one you'll see nothing and think it failed.
+
 ### Recovery Procedures
 
 When things go wrong, recover silently:

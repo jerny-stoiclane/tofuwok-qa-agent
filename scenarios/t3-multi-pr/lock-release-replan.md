@@ -46,7 +46,7 @@ Assert: lock still held by PR1, PR2 sees conflict
 ### Phase 5: Merge PR1 → Apply
 skill: merge-pr (PR1)
 skill: wait-for-applies (PR1, bravo/snowflake)
-Assert: apply succeeded, lock released (or applied=true then released on merge)
+Assert: apply succeeded (check via tofuwok runs API + GitHub Check Runs API), lock released on merge
 
 ### Phase 6: Retrigger PR2 Plan
 After PR1's lock is released, PR2 needs a fresh plan.

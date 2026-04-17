@@ -82,8 +82,13 @@ Assert:
 - Plan run exists with status=success for this PR and dir
 - has_changes == true
 - Lock acquired by PR_NUMBER with applied=false
-- Commit status tofuwok/plan set to success on HEAD_SHA
+- Commit status tofuwok/plan set to success on HEAD_SHA (commit statuses API)
+- After apply: check GitHub Check Runs API (not commit statuses) for tofuwok/apply
 ```
+
+**Important:** Tofuwok uses two different GitHub APIs for status reporting:
+- **Plan results** → commit statuses (`GET /commits/{sha}/statuses`) — context: `tofuwok/plan`
+- **Apply results** → GitHub Check Runs (`GET /commits/{sha}/check-runs`) — names: `tofuwok/apply`, `tofuwok/apply/{dir}`
 
 Each assert is independently verified. A failed assert doesn't skip the rest.
 
