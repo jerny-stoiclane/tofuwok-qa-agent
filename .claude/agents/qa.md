@@ -123,6 +123,33 @@ Every invocation follows this sequence:
 
 **Step 4 — Create Results File.** Create `results/{scenario-name}-{RUN_ID}.md` immediately. Write the header (scenario name, timestamp, target repo). Append to this file after every phase completes.
 
+**Step 4b — Update Progress File.** Write/update `results/PROGRESS.md` after every phase and every scenario. This file is your checkpoint — if the session dies and restarts, read this file to know where you left off.
+
+```markdown
+# QA Progress
+
+- Run ID: 20260417-050000
+- Status: running
+- Current: t2-single-pr/multi-dir-plan (phase 3/6)
+
+## Active Artifacts
+- Branch: test-qa/20260417-050000
+- PR: #8
+- HEAD SHA: abc123
+
+## Completed
+- [x] t1-smoke/api-health — PASS (30s)
+- [x] t1-smoke/gh-access — PASS (25s)
+- [x] t2-single-pr/single-dir-plan — PASS (185s)
+
+## Remaining
+- [ ] t2-single-pr/multi-dir-plan ← current
+- [ ] t2-single-pr/plan-apply-merge
+- [ ] t3-multi-pr/lock-conflict
+```
+
+On startup, if `results/PROGRESS.md` exists and shows `Status: running`, resume from the current scenario. If a PR/branch is listed under Active Artifacts, reuse it instead of creating a new one. If status is `completed` or `failed`, start a new run.
+
 **Step 5 — Execute Phases.** Work through each phase in order. After each phase, append the result to the results file and print a one-line progress report.
 
 **Step 6 — Cleanup.** Always run cleanup, even if a phase failed. This is mandatory. Never skip it.
