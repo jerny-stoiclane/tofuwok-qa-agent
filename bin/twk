@@ -54,11 +54,15 @@ case "$CMD" in
       esac
     done
     RESULT=$(api GET "/runs/$OWNER/$REPO")
-    FILTER="."
-    [ -n "$PR" ] && FILTER="$FILTER | select(.pr_number==$PR)"
-    [ -n "$TYPE" ] && FILTER="$FILTER | select(.run_type==\"$TYPE\")"
-    [ -n "$DIR" ] && FILTER="$FILTER | select(.dir==\"$DIR\")"
-    echo "$RESULT" | jq "[.[] | $FILTER | {id, status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy, started_at, completed_at}]"
+    if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
+      echo "[]"
+    else
+      FILTER="."
+      [ -n "$PR" ] && FILTER="$FILTER | select(.pr_number==$PR)"
+      [ -n "$TYPE" ] && FILTER="$FILTER | select(.run_type==\"$TYPE\")"
+      [ -n "$DIR" ] && FILTER="$FILTER | select(.dir==\"$DIR\")"
+      echo "$RESULT" | jq "[.[] | $FILTER | {id, status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy, started_at, completed_at}]" 2>/dev/null || echo "[]"
+    fi
     ;;
 
   locks)
@@ -70,10 +74,13 @@ case "$CMD" in
       esac
     done
     RESULT=$(api GET "/locks/$OWNER/$REPO")
-    if [ -n "$DIR" ]; then
-      echo "$RESULT" | jq ".[] | select(.dir==\"$DIR\") | {dir, pr_number, applied, lock_policy, locked_by, locked_at}"
+    # Handle null/empty response
+    if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
+      echo "[]"
+    elif [ -n "$DIR" ]; then
+      echo "$RESULT" | jq ".[] | select(.dir==\"$DIR\") | {dir, pr_number, applied, lock_policy, locked_by, locked_at}" 2>/dev/null || echo "{}"
     else
-      echo "$RESULT" | jq '[.[] | {dir, pr_number, applied, lock_policy}]'
+      echo "$RESULT" | jq '[.[] | {dir, pr_number, applied, lock_policy}]' 2>/dev/null || echo "[]"
     fi
     ;;
 
