@@ -115,6 +115,8 @@ Every invocation follows this sequence:
 
 **Step 1 — Preflight.** Verify the environment is ready. Check tofuwok API health, repo registration (must have `execution_mode: "gha"`), `gh` CLI authentication, and clean state (no stale test PRs or orphan locks). If stale artifacts exist, clean them first before proceeding.
 
+**Also read the repo settings** from the preflight repos response to determine the apply model. The `settings` object on the repo tells you `default_lock_mode` and `default_lock_policy`. For this repo, the model is **apply-before-merge**: trigger apply via `POST /api/v1/trigger`, wait for it to succeed, then merge the PR.
+
 **Step 2 — Generate Run ID.** Create a unique identifier: `YYYYMMDD-HHMMSS` format. This tags everything: branch names, PR titles, result files.
 
 **Step 3 — Read Scenario.** Read the scenario file from `scenarios/`. Parse the phases and assertions.
@@ -205,11 +207,13 @@ This section documents the key operations the agent performs. These are NOT bash
 
 Poll: `GET /api/v1/runs/{owner}/{repo}?pr_number={N}`
 
-Only extract the fields you need: `status`, `dir`, `run_type`, `has_changes`, `resources_to_add/change/destroy`. Use `jq` to select only these fields — **never dump the full response** (the `output` and `error` fields contain large terraform output that clutters logs and can break `jq` with control characters).
+Only extract the fields you need: `status`, `dir`, `run_type`, `has_changes`, `resources_to_add/change/destroy`. **Always pipe through `tr` to strip control characters before `jq`** — the `output`/`error` fields contain terraform ANSI codes that break JSON parsing.
 
 ```
-curl ... | jq '[.[] | {status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy}]'
+curl ... | tr -d '\000-\037' | jq '[.[] | {status, dir, run_type, has_changes, resources_to_add, resources_to_change, resources_to_destroy}]'
 ```
+
+**Every `curl | jq` in this agent MUST use `tr -d '\000-\037'` between them.** No exceptions.
 
 Count completed runs (status in `["success", "failure"]`) against expected dirs. Done when all dirs have a terminal run.
 
@@ -340,14 +344,20 @@ Do not print anything else between phase lines. No explanations, no questions, n
 
 ### PR Lifecycle — CRITICAL
 
-**Merge = Apply.** This is an apply-after-merge model. Merging a PR triggers tofuwok to dispatch apply workflows. Closing a PR does NOT trigger apply — it just releases locks.
+**Apply BEFORE Merge.** This is an apply-before-merge model. The flow is:
+
+1. PR created → tofuwok dispatches plan → plan succeeds → lock acquired
+2. **Trigger apply** via tofuwok API: `POST /api/v1/trigger` with `run_type: "apply"`
+3. Tofuwok dispatches apply workflow → apply succeeds → lock marked `applied=true`
+4. **THEN merge** the PR (code lands on main, lock released on merge event)
 
 | Action | What happens | When to use |
 |--------|-------------|-------------|
-| **Merge** (`gh pr merge --merge`) | Code lands on main → tofuwok dispatches apply → terraform runs | End of every successful T2+ scenario |
-| **Close** (`gh pr close`) | PR closed, no apply, locks released | Only during cleanup of FAILED scenarios where merge was never reached |
+| **Trigger apply** (`POST /trigger`) | Tofuwok dispatches apply workflow → terraform apply runs | After plan succeeds, before merge |
+| **Merge** (`gh pr merge --merge`) | Code lands on main → tofuwok releases lock | After apply succeeds |
+| **Close** (`gh pr close`) | PR closed, no apply, locks released | Only during cleanup of FAILED scenarios |
 
-**Every T2+ scenario that passes MUST end with a merge.** The merge-then-verify-apply is the core thing we're testing. If you close instead of merge, you've skipped the most important part of the test.
+**Every T2+ scenario that passes MUST: trigger apply → verify apply → THEN merge.** If you merge without applying first, you skip the apply verification. If you close instead of merge, you skip everything.
 - Stop the scenario on a single assertion failure (continue and report all)
 - Guess at tofuwok API endpoints — use only the ones documented here
 - Create resources in AWS (all test terraform uses null_resource)

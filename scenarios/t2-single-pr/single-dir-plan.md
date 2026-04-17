@@ -45,10 +45,20 @@ Assert commit status (GitHub API — this is set BY tofuwok, we verify it landed
 Assert PR comment (GitHub API — posted BY tofuwok):
 - PR has a comment with plan output
 
-### Phase 4: Merge PR
-Merge the PR to trigger apply. This is part of the test, not cleanup.
-```bash
-gh pr merge PR_NUMBER --repo TARGET_REPO --merge
+### Phase 4: Trigger Apply via Tofuwok API
+```
+POST /api/v1/trigger
+{
+  "owner": "jerny-stoiclane",
+  "repo": "terraform-orchestrator-gha",
+  "dir": "test/companies/bravo/snowflake",
+  "workspace": "default",
+  "pr_number": PR_NUMBER,
+  "commit_sha": HEAD_SHA,
+  "branch": BRANCH,
+  "run_type": "apply",
+  "triggered_by": "qa-agent"
+}
 ```
 
 ### Phase 5: Wait for Apply via Tofuwok API
@@ -57,8 +67,18 @@ Timeout: 300s
 
 ### Phase 6: Verify Apply
 Assert via tofuwok API:
-- Apply run exists with status=success
-- Lock released or applied=true
+- Apply run exists with status=success, run_type=apply
+- Lock applied=true
+
+### Phase 7: Merge PR
+Apply succeeded — now merge to land code on main and release lock.
+```bash
+gh pr merge PR_NUMBER --repo TARGET_REPO --merge
+```
+
+### Phase 8: Verify Lock Released
+Assert via tofuwok locks API:
+- Lock for test/companies/bravo/snowflake is released (no longer exists)
 
 ### Cleanup
-Release any remaining locks, delete test branches. Do NOT close PRs — they were already merged.
+Delete test branch if not auto-deleted. No PRs to close — already merged.
