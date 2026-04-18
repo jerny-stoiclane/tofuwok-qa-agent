@@ -318,10 +318,11 @@ For `test/companies/_qa/aws/us-east-1/`:
      - `main.tf` — empty (scenarios add resources)
      - `variables.tf` — `variable "region" { default = "us-east-1" }`
      - `backend.tf` — `terraform { backend "s3" {} }` (**MUST be S3, not local**)
-     - `ci.s3.tfbackend` — S3 backend config:
+     - `ci.s3.tfbackend` — S3 backend config (stoic-ai-test account):
        ```
-       bucket         = "tf-orchestrator-gha-state"
-       key            = "test/companies/_qa/aws/us-east-1/terraform.tfstate"
+       bucket         = "stoiclane-ai-test-ue1-global-terraform-state"
+       dynamodb_table = "stoiclane-ai-test-ue1-global-terraform-state"
+       key            = "qa/test/companies/_qa/aws/us-east-1/terraform.tfstate"
        region         = "us-east-1"
        encrypt        = true
        ```
@@ -332,8 +333,34 @@ For `test/companies/_qa/aws/us-east-1/`:
 
 Before running any create+destroy lifecycle scenario, verify:
 1. `backend.tf` contains `backend "s3" {}` (not `backend "local" {}`)
-2. `ci.s3.tfbackend` exists with valid bucket/key/region
-3. The state bucket exists and the OIDC role has s3:GetObject/PutObject on it
+2. `ci.s3.tfbackend` exists with valid bucket/key/region pointing to `stoiclane-ai-test-ue1-global-terraform-state`
+3. The OIDC role has s3:GetObject/PutObject on the state bucket and dynamodb:GetItem/PutItem on the lock table
+
+### Tagging All QA Resources
+
+**Every AWS resource created by QA scenarios MUST be tagged for cleanup recovery.** If something goes wrong, we can find and destroy all QA resources by tag.
+
+Required tags on every resource:
+```hcl
+tags = {
+  ManagedBy   = "tofuwok-qa"
+  QARunID     = "{RUN_ID}"
+  QAScenario  = "{scenario_name}"
+  Environment = "qa-test"
+}
+```
+
+To find all QA resources if cleanup is needed:
+```bash
+aws resourcegroupstaggingapi get-resources --tag-filters Key=ManagedBy,Values=tofuwok-qa
+```
+
+To destroy everything tagged as QA:
+```bash
+# List first, then destroy manually — never auto-destroy without review
+aws resourcegroupstaggingapi get-resources --tag-filters Key=ManagedBy,Values=tofuwok-qa \
+  --query 'ResourceTagMappingList[].ResourceARN' --output text
+```
 
 For multi-region (`us-west-2`): same structure, different region default.
 For multi-account (`_qa-secondary`): same structure, different `ci.env` with secondary account role.
