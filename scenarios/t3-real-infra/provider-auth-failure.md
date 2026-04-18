@@ -3,7 +3,7 @@ name: provider-auth-failure
 tier: t3
 timeout: 180
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # Provider Auth Failure: Bad OIDC role

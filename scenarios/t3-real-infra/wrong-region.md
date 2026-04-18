@@ -3,7 +3,7 @@ name: wrong-region
 tier: t3
 timeout: 180
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # Wrong Region: Provider region mismatch

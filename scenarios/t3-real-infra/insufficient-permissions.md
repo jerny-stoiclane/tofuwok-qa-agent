@@ -3,7 +3,7 @@ name: insufficient-permissions
 tier: t3
 timeout: 180
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # Insufficient Permissions: Role lacks required IAM permissions

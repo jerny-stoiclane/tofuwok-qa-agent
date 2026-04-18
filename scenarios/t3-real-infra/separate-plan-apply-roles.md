@@ -3,7 +3,7 @@ name: separate-plan-apply-roles
 tier: t3
 timeout: 600
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # Separate Plan/Apply Roles: Different IAM roles for read vs write

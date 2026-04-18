@@ -3,7 +3,7 @@ name: ssm-parameter-lifecycle
 tier: t3
 timeout: 600
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # SSM Parameter Lifecycle: Real AWS resource create + destroy

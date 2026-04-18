@@ -3,7 +3,7 @@ name: drift-detection
 tier: t2
 timeout: 600
 dirs:
-  - test/companies/bravo/snowflake
+  - test/companies/_qa/aws/us-east-1
 ---
 
 # Drift Detection: State changed outside of terraform
@@ -19,7 +19,7 @@ Captures: SETUP_PR, SETUP_SHA
 ### Phase 2: Simulate Drift
 After merge, the resource is in state. Now taint it or modify state to simulate drift:
 ```bash
-cd test/companies/bravo/snowflake
+cd test/companies/_qa/aws/us-east-1
 terraform taint null_resource.qa_{RUN_ID}
 ```
 Or if taint isn't available, use `terraform state rm` to remove the resource from state (making terraform think it needs to recreate it).
