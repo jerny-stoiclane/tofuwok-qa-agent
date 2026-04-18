@@ -1,42 +1,40 @@
 ---
 name: provider-auth-failure
-tier: t2
+tier: t3
 timeout: 180
 dirs:
   - test/companies/bravo/snowflake
 ---
 
-# Provider Auth Failure: Valid provider, bad credentials
+# Provider Auth Failure: Bad OIDC role
 
-Create PR with a resource that requires AWS credentials but the plan runs without valid creds (or with intentionally bad creds). Terraform init succeeds (provider downloads fine) but plan fails on authentication.
+Test dir with a valid AWS provider but auth config pointing to a non-existent role. tofuwok-runner's OIDC auth fails on AssumeRoleWithWebIdentity. Verifies tofuwok surfaces the error correctly.
 
 ## Phases
 
 ### Phase 1: Create Branch + PR
-Add an AWS resource that requires real credentials to plan:
+Add AWS provider + a data source that requires auth:
 ```hcl
-data "aws_caller_identity" "bad_creds" {}
+data "aws_caller_identity" "current" {}
 ```
-This requires the AWS provider and valid credentials to plan. Since the test runner uses a role that may not have this permission, or the resource references a non-existent account, plan should fail with an auth error.
+Configure the dir's auth to use a bad role (e.g., `arn:aws:iam::000000000000:role/does-not-exist`).
 
 Push, create PR.
 Captures: PR_NUMBER, HEAD_SHA
 
 ### Phase 2: Wait for Plan
-Poll tofuwok for plan run. Should reach terminal status (failure).
+tofuwok-runner attempts OIDC → AssumeRole → fails.
 Timeout: 180s
 
 ### Phase 3: Verify Auth Failure
 Assert via tofuwok API:
-- Run exists with status=failure
-- Error output mentions authentication, credentials, or access denied
-- has_changes=false (plan never completed)
-- Lock behavior: check if lock was acquired then released, or never acquired
+- Run status=failure
+- Error output contains auth-related error (AssumeRole, AccessDenied, credentials)
+- has_changes=false
 
-### Phase 4: Verify Error Surfaced
-Assert:
-- Tofuwok posted failure status (commit status or check run)
-- PR comment contains error information about the auth failure
+Assert tofuwok surfaced it:
+- Failure status/check run posted
+- PR comment shows the auth error clearly (not a raw stack trace)
 
 ### Cleanup
-Close PR (don't merge — bad config), delete branch, release any locks.
+Close PR, delete branch, release any locks.
