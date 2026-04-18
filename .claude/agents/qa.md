@@ -350,7 +350,23 @@ For multi-account (`_qa-secondary`): same structure, different `ci.env` with sec
 
 ### Creating a Test PR
 
-1. `gh pr create` with title `[qa] {scenario} — {RUN_ID}` and body `Automated QA test`
+1. `gh pr create` with title `[qa] {scenario} — {RUN_ID}` and body that includes the scenario details:
+   ```
+   ## QA Test: {scenario}
+   **Run ID:** {RUN_ID}
+   **Scenario:** `scenarios/{tier}/{scenario}.md`
+   **Tier:** {tier}
+   **Dirs:** {list of dirs being tested}
+   
+   ### What this tests
+   {first line of the scenario description}
+   
+   ### Expected outcome
+   {brief summary of assertions}
+   
+   ---
+   _Automated by tofuwok-qa agent_
+   ```
 2. Extract PR number from the output URL
 3. Get HEAD SHA via `gh pr view {number} --json headRefOid`
 4. Wait for tofuwok to receive the affected upload and create runs. Poll tofuwok: `GET /api/v1/runs/{owner}/{repo}` filtering for `pr_number == {N}`. Timeout 120s, poll every 10s. Once tofuwok has runs for this PR, the affected detection succeeded.
