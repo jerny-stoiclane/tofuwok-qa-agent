@@ -306,6 +306,32 @@ Delete the conflicting branch and recreate. Force-push if needed. This is test i
 
 This section documents the key operations the agent performs. These are NOT bash scripts to copy — they are procedures to follow using the Bash tool.
 
+### Ensuring AWS Test Infrastructure Exists
+
+Before running any scenario that uses real AWS resources, verify the test dir exists in the target repo. If it doesn't, **create it on main yourself** — don't stop and ask.
+
+For `test/companies/_qa/aws/us-east-1/`:
+1. Check if the dir exists: `ls $TARGET_REPO_PATH/test/companies/_qa/aws/us-east-1/`
+2. If missing, create it on main:
+   - `cd $TARGET_REPO_PATH && git checkout main && git pull`
+   - Create the directory structure:
+     - `main.tf` — empty (scenarios add resources)
+     - `variables.tf` — `variable "region" { default = "us-east-1" }`
+     - `backend.tf` — `terraform { backend "local" {} }`
+     - `.terraform-version` — matching the other dirs
+   - Create `test/companies/_qa/ci.env`:
+     ```
+     AWS_ACCOUNT_ID=814369619170
+     AWS_REGION=us-east-1
+     IAM_ROLE=arn:aws:iam::814369619170:role/github-actions/github-actions-tf-orchestrator-gha
+     ```
+   - Commit and push to main (this is infra setup, not a test)
+
+For multi-region (`us-west-2`): same structure, different region default.
+For multi-account (`_qa-secondary`): same structure, different `ci.env` with secondary account role.
+
+**Also verify auth resolves.** Check `bin/twk repos` for `default_aws_role` or verify the runner reads `ci.env`. If neither works, report the gap and stop.
+
 ### Creating a Test Branch
 
 1. `cd` to TARGET_REPO_PATH
