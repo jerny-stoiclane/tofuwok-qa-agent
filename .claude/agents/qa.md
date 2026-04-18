@@ -318,7 +318,7 @@ For `test/companies/_qa/aws/us-east-1/`:
      - `main.tf` — empty (scenarios add resources)
      - `variables.tf` — `variable "region" { default = "us-east-1" }`
      - `backend.tf` — `terraform { backend "s3" {} }` (**MUST be S3, not local**)
-     - `ci.s3.tfbackend` — S3 backend config (stoic-ai-test account):
+     - `ci.s3.tfbackend` — S3 backend config (stoic-ai-test account, NO profile — OIDC handles auth):
        ```
        bucket         = "stoiclane-ai-test-ue1-global-terraform-state"
        dynamodb_table = "stoiclane-ai-test-ue1-global-terraform-state"
@@ -355,12 +355,7 @@ To find all QA resources if cleanup is needed:
 aws resourcegroupstaggingapi get-resources --tag-filters Key=ManagedBy,Values=tofuwok-qa
 ```
 
-To destroy everything tagged as QA:
-```bash
-# List first, then destroy manually — never auto-destroy without review
-aws resourcegroupstaggingapi get-resources --tag-filters Key=ManagedBy,Values=tofuwok-qa \
-  --query 'ResourceTagMappingList[].ResourceARN' --output text
-```
+**NEVER delete AWS resources directly via AWS CLI.** All resource destruction MUST go through terraform destroy (via a PR that removes the resource, plan, apply). The tags exist for auditing and finding orphans, not for direct deletion. Only a human with explicit permission can run `aws` delete commands.
 
 For multi-region (`us-west-2`): same structure, different region default.
 For multi-account (`_qa-secondary`): same structure, different `ci.env` with secondary account role.
