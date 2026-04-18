@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# tf-state — terraform state verification tool for QA agent
+# Usage: tf-state <command> [args...]
+#
+# Commands:
+#   check    --bucket B --key K            Verify state exists in S3
+#   resources --bucket B --key K           List resources in state
+#   count    --bucket B --key K            Count resources in state
+#   diff     --bucket B --key K --expect N Verify resource count matches expected
+#   pull     --dir D                       Pull state from configured backend, output as JSON
+
+set -euo pipefail
+
+CMD=${1:-help}
+shift || true
+
+case "$CMD" in
+  check)
+    BUCKET="" KEY=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --bucket) BUCKET=$2; shift 2 ;;
+        --key) KEY=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -z "$BUCKET" ] || [ -z "$KEY" ] && { echo "ERROR: --bucket and --key required"; exit 1; }
+    if aws s3api head-object --bucket "$BUCKET" --key "$KEY" 2>/dev/null; then
+      SIZE=$(aws s3api head-object --bucket "$BUCKET" --key "$KEY" --query 'ContentLength' --output text)
+      MODIFIED=$(aws s3api head-object --bucket "$BUCKET" --key "$KEY" --query 'LastModified' --output text)
+      echo "EXISTS: s3://$BUCKET/$KEY (${SIZE} bytes, modified $MODIFIED)"
+    else
+      echo "MISSING: s3://$BUCKET/$KEY"
+      exit 1
+    fi
+    ;;
+
+  resources)
+    BUCKET="" KEY="" DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --bucket) BUCKET=$2; shift 2 ;;
+        --key) KEY=$2; shift 2 ;;
+        --dir) DIR=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "$DIR" ]; then
+      cd "$DIR"
+      terraform show -json 2>/dev/null | jq '[.values.root_module.resources[] | {type, name, provider: .provider_name}]'
+    elif [ -n "$BUCKET" ] && [ -n "$KEY" ]; then
+      aws s3 cp "s3://$BUCKET/$KEY" /tmp/tf-state-check.json --quiet
+      jq '[.resources[] | {type: .type, name: .name, instances: (.instances | length)}]' /tmp/tf-state-check.json
+      rm -f /tmp/tf-state-check.json
+    else
+      echo "ERROR: --dir or --bucket/--key required"; exit 1
+    fi
+    ;;
+
+  count)
+    BUCKET="" KEY="" DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --bucket) BUCKET=$2; shift 2 ;;
+        --key) KEY=$2; shift 2 ;;
+        --dir) DIR=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "$DIR" ]; then
+      cd "$DIR"
+      terraform show -json 2>/dev/null | jq '.values.root_module.resources | length'
+    elif [ -n "$BUCKET" ] && [ -n "$KEY" ]; then
+      aws s3 cp "s3://$BUCKET/$KEY" /tmp/tf-state-check.json --quiet
+      jq '[.resources[].instances[]] | length' /tmp/tf-state-check.json
+      rm -f /tmp/tf-state-check.json
+    else
+      echo "ERROR: --dir or --bucket/--key required"; exit 1
+    fi
+    ;;
+
+  diff)
+    BUCKET="" KEY="" EXPECT="" DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --bucket) BUCKET=$2; shift 2 ;;
+        --key) KEY=$2; shift 2 ;;
+        --dir) DIR=$2; shift 2 ;;
+        --expect) EXPECT=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -z "$EXPECT" ] && { echo "ERROR: --expect required"; exit 1; }
+
+    if [ -n "$DIR" ]; then
+      ACTUAL=$(cd "$DIR" && terraform show -json 2>/dev/null | jq '.values.root_module.resources | length')
+    elif [ -n "$BUCKET" ] && [ -n "$KEY" ]; then
+      aws s3 cp "s3://$BUCKET/$KEY" /tmp/tf-state-check.json --quiet
+      ACTUAL=$(jq '[.resources[].instances[]] | length' /tmp/tf-state-check.json)
+      rm -f /tmp/tf-state-check.json
+    else
+      echo "ERROR: --dir or --bucket/--key required"; exit 1
+    fi
+
+    if [ "$ACTUAL" = "$EXPECT" ]; then
+      echo "PASS: resource count $ACTUAL matches expected $EXPECT"
+    else
+      echo "FAIL: expected $EXPECT resources, got $ACTUAL"
+      exit 1
+    fi
+    ;;
+
+  pull)
+    DIR=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --dir) DIR=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -z "$DIR" ] && { echo "ERROR: --dir required"; exit 1; }
+    cd "$DIR"
+    terraform state pull 2>/dev/null | jq .
+    ;;
+
+  help|*)
+    head -9 "$0" | tail -7
+    ;;
+esac
