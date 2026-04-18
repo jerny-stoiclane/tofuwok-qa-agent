@@ -317,15 +317,23 @@ For `test/companies/_qa/aws/us-east-1/`:
    - Create the directory structure:
      - `main.tf` — empty (scenarios add resources)
      - `variables.tf` — `variable "region" { default = "us-east-1" }`
-     - `backend.tf` — `terraform { backend "local" {} }`
+     - `backend.tf` — `terraform { backend "s3" {} }` (**MUST be S3, not local**)
+     - `ci.s3.tfbackend` — S3 backend config:
+       ```
+       bucket         = "tf-orchestrator-gha-state"
+       key            = "test/companies/_qa/aws/us-east-1/terraform.tfstate"
+       region         = "us-east-1"
+       encrypt        = true
+       ```
      - `.terraform-version` — matching the other dirs
-   - Create `test/companies/_qa/ci.env`:
-     ```
-     AWS_ACCOUNT_ID=814369619170
-     AWS_REGION=us-east-1
-     IAM_ROLE=arn:aws:iam::814369619170:role/github-actions/github-actions-tf-orchestrator-gha
-     ```
    - Commit and push to main (this is infra setup, not a test)
+
+**CRITICAL: Backend must be S3, not local.** Local backend state lives on the GHA runner and disappears after the workflow ends. Any scenario that creates a resource in one PR and destroys it in another WILL FAIL with local backend because the second PR's runner has no state. S3 backend persists state across runs.
+
+Before running any create+destroy lifecycle scenario, verify:
+1. `backend.tf` contains `backend "s3" {}` (not `backend "local" {}`)
+2. `ci.s3.tfbackend` exists with valid bucket/key/region
+3. The state bucket exists and the OIDC role has s3:GetObject/PutObject on it
 
 For multi-region (`us-west-2`): same structure, different region default.
 For multi-account (`_qa-secondary`): same structure, different `ci.env` with secondary account role.
